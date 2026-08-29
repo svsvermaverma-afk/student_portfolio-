@@ -12,14 +12,13 @@ def clean_val(val):
     if pd.isna(val) or val is None:
         return ""
     val_str = str(val).strip()
-    # Agar floating point format me hai (jaise 123.0) to decimal hatao
     if val_str.endswith(".0"):
         val_str = val_str[:-2]
-    if val_str.lower() == "nan" or val_str.lower() == "none":
+    if val_str.lower() in ["nan", "none"]:
         return ""
     return val_str
 
-# --- Database Setup & Helper Functions ---
+# --- Database Connection & Setup ---
 def get_db_connection():
     return sqlite3.connect("class12b_portfolio.db", check_same_thread=False)
 
@@ -62,7 +61,7 @@ def init_db():
         )
     ''')
     
-    # Portfolio Submissions Table
+    # Portfolio Table
     c.execute('''
         CREATE TABLE IF NOT EXISTS portfolio (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,23 +72,31 @@ def init_db():
             project_link TEXT,
             grade TEXT DEFAULT 'Pending',
             feedback TEXT DEFAULT 'No feedback yet',
-            submitted_on TEXT,
-            FOREIGN KEY (student_username) REFERENCES students(username)
+            submitted_on TEXT
         )
     ''')
     
-    # Teacher / Admin Account
+    # Check if student_roll_no exists in portfolio from old version and rename/handle
+    try:
+        c.execute("PRAGMA table_info(portfolio)")
+        columns = [row[1] for row in c.fetchall()]
+        if 'student_roll_no' in columns and 'student_username' not in columns:
+            c.execute("ALTER TABLE portfolio RENAME COLUMN student_roll_no TO student_username")
+    except Exception:
+        pass
+    
+    # Admin Account
     c.execute("SELECT * FROM students WHERE username = 'admin'")
     if not c.fetchone():
         c.execute("""
-            INSERT INTO students (roll_no, username, password, student_name, role, class_name)
+            INSERT OR REPLACE INTO students (roll_no, username, password, student_name, role, class_name)
             VALUES ('ADMIN01', 'admin', 'admin123', 'Class Teacher (12-B)', 'Teacher', '12-B')
         """)
         
     conn.commit()
     conn.close()
 
-# --- Excel Sync Function ---
+# --- Excel Sync Logic ---
 def sync_excel_data():
     excel_files = ["studentport.xlsx", "studentport.xls"]
     target_file = None
@@ -102,7 +109,6 @@ def sync_excel_data():
         return 0, "studentport.xlsx file nahi mili."
 
     try:
-        # Har column ko string treat karega taaki decimal na aaye
         df_excel = pd.read_excel(target_file, dtype=str)
         conn = get_db_connection()
         c = conn.cursor()
@@ -116,7 +122,6 @@ def sync_excel_data():
             if not s_name:
                 continue
             
-            # Login ID = Student Name & Password = S.R. No. (Fallback to '123456' if empty)
             login_username = s_name.strip()
             login_password = sr_no if sr_no else "123456"
             
@@ -163,7 +168,6 @@ def sync_excel_data():
     except Exception as e:
         return 0, str(e)
 
-# Initialize database & sync data on startup
 init_db()
 if "initial_sync_done" not in st.session_state:
     sync_excel_data()
@@ -177,11 +181,11 @@ if "logged_in" not in st.session_state:
 def login_user(username, password):
     conn = get_db_connection()
     c = conn.cursor()
-    # Case-insensitive login for Name & matching SR No
     c.execute("""
         SELECT * FROM students 
-        WHERE LOWER(TRIM(username)) = LOWER(TRIM(?)) AND TRIM(password) = TRIM(?)
-    """, (username, password))
+        WHERE (LOWER(TRIM(username)) = LOWER(TRIM(?)) OR LOWER(TRIM(student_name)) = LOWER(TRIM(?))) 
+        AND TRIM(password) = TRIM(?)
+    """, (username, username, password))
     user = c.fetchone()
     conn.close()
     return user
@@ -216,14 +220,13 @@ if not st.session_state.logged_in:
         st.info("""
         **Login Instructions:**
         - **Teacher (Admin):**
-          - Username: `admin`
-          - Password: `admin123`
+          - Username: `admin` | Password: `admin123`
         - **Class 12-B Students:**
-          - **Login ID:** Student ka Name (e.g. `AMAN SHARMA`)
-          - **Password:** Student ka **S.R. NO.** (jo Excel sheet me hai)
+          - **Login ID:** Student ka Name
+          - **Password:** Student ka S.R. NO.
         """)
 
-# --- Authenticated Dashboard ---
+# --- Authenticated App ---
 else:
     user_row = st.session_state.user_data
     role = user_row[28]
@@ -232,14 +235,12 @@ else:
     student_sr = user_row[4]
     student_name = user_row[15]
     
-    # Sidebar
     with st.sidebar:
         st.write(f"### 👋 Welcome, **{student_name}**")
         st.write(f"**Role:** `{role}`")
         if role == "Student":
             st.write(f"**Roll No:** {student_roll}")
             st.write(f"**S.R. No:** {student_sr}")
-            st.write(f"**Mobile:** {user_row[26]}")
         st.write("**Class:** 12-B")
         st.divider()
         if st.button("Logout", use_container_width=True):
@@ -248,31 +249,33 @@ else:
     conn = get_db_connection()
 
     # ==========================================
-    # 1. TEACHER DASHBOARD
+    # TEACHER DASHBOARD
     # ==========================================
     if role == "Teacher":
         st.title("👨‍🏫 Teacher Dashboard - Class 12-B")
         
-        tabs = st.tabs([
+        tab1, tab2, tab3 = st.tabs([
             "📋 Portfolios Review", 
             "👥 All Students Data", 
             "🔄 Re-Sync Excel Data"
         ])
         
-        # TAB 1: Review Portfolios
-        with tabs[0]:
+        with tab1:
             st.subheader("Student Portfolio Submissions")
-            query = """
-                SELECT p.id, s.roll_no, s.student_name, s.sr_no, p.title, p.category, 
-                       p.description, p.project_link, p.grade, p.feedback, p.submitted_on
-                FROM portfolio p
-                JOIN students s ON p.student_username = s.username
-                ORDER BY p.id DESC
-            """
-            df_port = pd.read_sql_query(query, conn)
+            try:
+                query = """
+                    SELECT p.id, s.roll_no, s.student_name, s.sr_no, p.title, p.category, 
+                           p.description, p.project_link, p.grade, p.feedback, p.submitted_on
+                    FROM portfolio p
+                    LEFT JOIN students s ON p.student_username = s.username
+                    ORDER BY p.id DESC
+                """
+                df_port = pd.read_sql_query(query, conn)
+            except Exception:
+                df_port = pd.DataFrame()
             
             if df_port.empty:
-                st.info("Abhi tak kisi student ne submission nahi kiya hai.")
+                st.info("Abhi tak koi portfolio submission nahi hua hai.")
             else:
                 st.dataframe(df_port[["roll_no", "student_name", "sr_no", "title", "category", "grade", "submitted_on"]], use_container_width=True)
                 st.divider()
@@ -290,7 +293,7 @@ else:
                 with col_g1:
                     new_grade = st.selectbox("Grade", ["A+", "A", "B+", "B", "C", "Needs Revision"])
                 with col_g2:
-                    new_feedback = st.text_input("Teacher Feedback / Remarks", value=sel_row['feedback'])
+                    new_feedback = st.text_input("Teacher Feedback", value=sel_row['feedback'])
                     
                 if st.button("Update Grade & Feedback", type="primary"):
                     c = conn.cursor()
@@ -299,14 +302,17 @@ else:
                     st.success("Evaluation Saved!")
                     st.rerun()
 
-        # TAB 2: Students Master Record
-        with tabs[1]:
-            st.subheader("Class 12-B Master Student Records (Clean Data)")
-            students_df = pd.read_sql_query("""
-                SELECT roll_no, sr_no, student_name, student_name_hindi, father_name, 
-                       dob, aadhar_no, pen_no, mob_no, email_id, address 
-                FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC, roll_no ASC
-            """, conn)
+        with tab2:
+            st.subheader("Class 12-B Master Student Records")
+            try:
+                students_df = pd.read_sql_query("""
+                    SELECT roll_no, sr_no, student_name, student_name_hindi, father_name, 
+                           dob, aadhar_no, pen_no, mob_no, email_id, address 
+                    FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC, roll_no ASC
+                """, conn)
+            except Exception:
+                students_df = pd.DataFrame()
+
             st.write(f"Total Registered Students: **{len(students_df)}**")
             st.dataframe(students_df, use_container_width=True)
             
@@ -314,10 +320,8 @@ else:
                 csv_data = students_df.to_csv(index=False).encode('utf-8')
                 st.download_button("📥 Export Clean Data (CSV)", csv_data, "Class12B_Students_Clean.csv", "text/csv")
 
-        # TAB 3: Re-sync Button
-        with tabs[2]:
+        with tab3:
             st.subheader("Sync with studentport.xlsx")
-            st.write("Agar sheet me naye records dale hain ya update kiya hai, to yahan click karein:")
             if st.button("🔄 Sync Now", type="primary"):
                 count, msg = sync_excel_data()
                 if count > 0:
@@ -327,7 +331,7 @@ else:
                     st.error(f"Sync error: {msg}")
 
     # ==========================================
-    # 2. STUDENT DASHBOARD
+    # STUDENT DASHBOARD
     # ==========================================
     else:
         st.title(f"🎒 My Portfolio - {student_name}")
@@ -337,10 +341,14 @@ else:
         
         with tab_s1:
             st.subheader("Submitted Items")
-            my_port = pd.read_sql_query(
-                "SELECT title, category, description, project_link, grade, feedback, submitted_on FROM portfolio WHERE student_username=? ORDER BY id DESC",
-                conn, params=(student_username,)
-            )
+            try:
+                my_port = pd.read_sql_query(
+                    "SELECT title, category, description, project_link, grade, feedback, submitted_on FROM portfolio WHERE student_username=? ORDER BY id DESC",
+                    conn, params=(student_username,)
+                )
+            except Exception:
+                my_port = pd.DataFrame()
+
             if my_port.empty:
                 st.info("Abhi tak koi portfolio submission nahi kiya gaya.")
             else:
@@ -349,7 +357,7 @@ else:
                         st.write(f"**Submitted on:** {row['submitted_on']}")
                         st.write(f"**Description:** {row['description']}")
                         if row['project_link']:
-                            st.write(f"**Project Link:** [{row['project_link']}]({row['project_link']})")
+                            st.write(f"**Link:** [{row['project_link']}]({row['project_link']})")
                         st.divider()
                         st.write(f"**Teacher Feedback:** {row['feedback']}")
 
