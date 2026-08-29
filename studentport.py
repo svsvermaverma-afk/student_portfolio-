@@ -8,29 +8,16 @@ from datetime import datetime
 # --- Page Config ---
 st.set_page_config(page_title="Class 12-B Portfolio Portal", page_icon="🎓", layout="wide")
 
-# --- Robust Cleaner Function ---
+# --- String & Decimal Cleaner ---
 def clean_val(val):
     if pd.isna(val) or val is None:
         return ""
     val_str = str(val).strip()
-    
-    # Check for empty/nan patterns
     if val_str.lower() in ["nan", "none", "nat", "<na>", "null"]:
         return ""
-        
-    # Remove float decimal like '1.0' -> '1', '38954.0' -> '38954'
+    # Remove floating point decimal: '37212.0' -> '37212'
     if re.match(r'^-?\d+\.0+$', val_str):
         val_str = val_str.split('.')[0]
-        
-    # Date cleaner (Agar date me timestamp 00:00:00 ho to remove karein)
-    if "00:00:00" in val_str:
-        val_str = val_str.replace("00:00:00", "").strip()
-        try:
-            parsed_dt = pd.to_datetime(val_str)
-            val_str = parsed_dt.strftime("%d-%m-%Y")
-        except Exception:
-            pass
-            
     return val_str
 
 # --- Database Connection ---
@@ -76,7 +63,7 @@ def init_db():
         )
     ''')
     
-    # Portfolio Submissions Table
+    # Portfolio Table
     c.execute('''
         CREATE TABLE IF NOT EXISTS portfolio (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,7 +78,15 @@ def init_db():
         )
     ''')
     
-    # Admin Account
+    # Auto-clean any existing .0 in passwords or sr_no directly inside SQLite
+    try:
+        c.execute("UPDATE students SET password = REPLACE(password, '.0', '') WHERE password LIKE '%.0'")
+        c.execute("UPDATE students SET sr_no = REPLACE(sr_no, '.0', '') WHERE sr_no LIKE '%.0'")
+        c.execute("UPDATE students SET roll_no = REPLACE(roll_no, '.0', '') WHERE roll_no LIKE '%.0'")
+    except Exception:
+        pass
+
+    # Ensure Admin Exists
     c.execute("SELECT * FROM students WHERE username = 'admin'")
     if not c.fetchone():
         c.execute("""
@@ -102,7 +97,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- Excel Sync & Auto-Clean Function ---
+# --- Excel Sync Logic ---
 def sync_excel_data():
     excel_files = ["studentport.xlsx", "studentport.xls"]
     target_file = None
@@ -119,7 +114,7 @@ def sync_excel_data():
         conn = get_db_connection()
         c = conn.cursor()
         
-        # Puraana student data clear karein (Teacher admin record retain rahega)
+        # Clear student records before fresh sync
         c.execute("DELETE FROM students WHERE role='Student'")
         
         success_count = 0
@@ -128,15 +123,16 @@ def sync_excel_data():
             sr_no = clean_val(row.get("S.R. NO.", ""))
             r_no = clean_val(row.get("ROLL NO.", ""))
             
-            # Agar Name ya Roll No blank/0 ho to skip karein
             if not s_name or s_name.lower() in ["nan", "nat"] or r_no == "0":
                 continue
             
-            # Username = Student Name, Password = S.R. No.
-            login_username = s_name.strip()
+            # Clean username & password
+            login_username = " ".join(s_name.split())
             login_password = sr_no if sr_no else "123456"
             
             dob_val = clean_val(row.get("D.O.B.", ""))
+            if "00:00:00" in dob_val:
+                dob_val = dob_val.replace("00:00:00", "").strip()
             
             c.execute("""
                 INSERT OR REPLACE INTO students (
@@ -159,7 +155,7 @@ def sync_excel_data():
                 clean_val(row.get("OCCUPATION Other-OTH / Hindalco -HE / Hindalco Supply- HS", "")),
                 clean_val(row.get("E.CODE", "")),
                 clean_val(row.get("DEPT.", "")),
-                s_name,
+                login_username,
                 clean_val(row.get("STUDENT NAME IN HINDI", "")),
                 clean_val(row.get("FATHER'S NAME", "")),
                 clean_val(row.get("FATHER'S NAME IN HINDI", "")),
@@ -183,22 +179,39 @@ def sync_excel_data():
 
 init_db()
 
-# --- Authentication Logic ---
+# Auto sync on first startup
+if "initial_sync_done" not in st.session_state:
+    sync_excel_data()
+    st.session_state.initial_sync_done = True
+
+# --- Flexible Authentication Logic ---
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_data = None
 
-def login_user(username, password):
+def login_user(entered_user, entered_pass):
+    user_clean = " ".join(entered_user.strip().split())
+    pass_clean = entered_pass.strip()
+    
+    # Decimal variations handle karne ke liye (37212 ya 37212.0)
+    pass_variants = [pass_clean, pass_clean + ".0", pass_clean.replace(".0", "")]
+    
     conn = get_db_connection()
     c = conn.cursor()
-    c.execute("""
-        SELECT * FROM students 
-        WHERE (LOWER(TRIM(username)) = LOWER(TRIM(?)) OR LOWER(TRIM(student_name)) = LOWER(TRIM(?))) 
-        AND TRIM(password) = TRIM(?)
-    """, (username, username, password))
-    user = c.fetchone()
+    
+    for p in set(pass_variants):
+        c.execute("""
+            SELECT * FROM students 
+            WHERE (LOWER(TRIM(username)) = LOWER(?) OR LOWER(TRIM(student_name)) = LOWER(?)) 
+            AND (TRIM(password) = ? OR TRIM(sr_no) = ?)
+        """, (user_clean, user_clean, p, p))
+        user = c.fetchone()
+        if user:
+            conn.close()
+            return user
+            
     conn.close()
-    return user
+    return None
 
 def logout_user():
     st.session_state.logged_in = False
@@ -224,19 +237,19 @@ if not st.session_state.logged_in:
                 st.success(f"Welcome {user[15]}!")
                 st.rerun()
             else:
-                st.error("Invalid Name ya Password (S.R. No.)!")
+                st.error("Invalid Name ya Password (S.R. No.)! Check spelling or contact Teacher.")
                 
     with col2:
         st.info("""
         **Login Guide:**
         - **Teacher (Admin):**
           - ID: `admin` | Password: `admin123`
-        - **Students:**
-          - **Login ID:** Apna Name (e.g. `ABHIMANYU YADAV`)
-          - **Password:** Apna S.R. NO. (e.g. `38954`)
+        - **Class 12-B Students:**
+          - **Login ID:** Student ka Name (e.g. `AJIT KUMAR`)
+          - **Password:** S.R. NO. (e.g. `37212`)
         """)
 
-# --- Authenticated Dashboards ---
+# --- Authenticated App ---
 else:
     user_row = st.session_state.user_data
     role = user_row[28]
@@ -259,7 +272,7 @@ else:
     conn = get_db_connection()
 
     # ==========================================
-    # TEACHER DASHBOARD
+    # 1. TEACHER DASHBOARD
     # ==========================================
     if role == "Teacher":
         st.title("👨‍🏫 Teacher Dashboard - Class 12-B")
@@ -343,7 +356,7 @@ else:
                     st.error(f"Sync error: {msg}")
 
     # ==========================================
-    # STUDENT DASHBOARD
+    # 2. STUDENT DASHBOARD
     # ==========================================
     else:
         st.title(f"🎒 My Portfolio - {student_name}")
