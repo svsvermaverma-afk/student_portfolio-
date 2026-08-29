@@ -2,23 +2,38 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import os
+import re
 from datetime import datetime
 
 # --- Page Config ---
 st.set_page_config(page_title="Class 12-B Portfolio Portal", page_icon="🎓", layout="wide")
 
-# --- Helper Function to Clean Numbers & Decimals ---
+# --- Robust Cleaner Function ---
 def clean_val(val):
     if pd.isna(val) or val is None:
         return ""
     val_str = str(val).strip()
-    if val_str.endswith(".0"):
-        val_str = val_str[:-2]
-    if val_str.lower() in ["nan", "none"]:
+    
+    # Check for empty/nan patterns
+    if val_str.lower() in ["nan", "none", "nat", "<na>", "null"]:
         return ""
+        
+    # Remove float decimal like '1.0' -> '1', '38954.0' -> '38954'
+    if re.match(r'^-?\d+\.0+$', val_str):
+        val_str = val_str.split('.')[0]
+        
+    # Date cleaner (Agar date me timestamp 00:00:00 ho to remove karein)
+    if "00:00:00" in val_str:
+        val_str = val_str.replace("00:00:00", "").strip()
+        try:
+            parsed_dt = pd.to_datetime(val_str)
+            val_str = parsed_dt.strftime("%d-%m-%Y")
+        except Exception:
+            pass
+            
     return val_str
 
-# --- Database Connection & Setup ---
+# --- Database Connection ---
 def get_db_connection():
     return sqlite3.connect("class12b_portfolio.db", check_same_thread=False)
 
@@ -61,7 +76,7 @@ def init_db():
         )
     ''')
     
-    # Portfolio Table
+    # Portfolio Submissions Table
     c.execute('''
         CREATE TABLE IF NOT EXISTS portfolio (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,15 +91,6 @@ def init_db():
         )
     ''')
     
-    # Check if student_roll_no exists in portfolio from old version and rename/handle
-    try:
-        c.execute("PRAGMA table_info(portfolio)")
-        columns = [row[1] for row in c.fetchall()]
-        if 'student_roll_no' in columns and 'student_username' not in columns:
-            c.execute("ALTER TABLE portfolio RENAME COLUMN student_roll_no TO student_username")
-    except Exception:
-        pass
-    
     # Admin Account
     c.execute("SELECT * FROM students WHERE username = 'admin'")
     if not c.fetchone():
@@ -96,7 +102,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- Excel Sync Logic ---
+# --- Excel Sync & Auto-Clean Function ---
 def sync_excel_data():
     excel_files = ["studentport.xlsx", "studentport.xls"]
     target_file = None
@@ -112,18 +118,25 @@ def sync_excel_data():
         df_excel = pd.read_excel(target_file, dtype=str)
         conn = get_db_connection()
         c = conn.cursor()
-        success_count = 0
         
+        # Puraana student data clear karein (Teacher admin record retain rahega)
+        c.execute("DELETE FROM students WHERE role='Student'")
+        
+        success_count = 0
         for _, row in df_excel.iterrows():
             s_name = clean_val(row.get("STUDENT'S NAME", ""))
             sr_no = clean_val(row.get("S.R. NO.", ""))
             r_no = clean_val(row.get("ROLL NO.", ""))
             
-            if not s_name:
+            # Agar Name ya Roll No blank/0 ho to skip karein
+            if not s_name or s_name.lower() in ["nan", "nat"] or r_no == "0":
                 continue
             
+            # Username = Student Name, Password = S.R. No.
             login_username = s_name.strip()
             login_password = sr_no if sr_no else "123456"
+            
+            dob_val = clean_val(row.get("D.O.B.", ""))
             
             c.execute("""
                 INSERT OR REPLACE INTO students (
@@ -139,7 +152,7 @@ def sync_excel_data():
                 clean_val(row.get("roll numer 10th", "")),
                 clean_val(row.get("PEN NUMBER", "")),
                 clean_val(row.get("AADHAR NO.", "")),
-                clean_val(row.get("D.O.B.", "")),
+                dob_val,
                 clean_val(row.get("DD", "")),
                 clean_val(row.get("MM", "")),
                 clean_val(row.get("YYYY", "")),
@@ -169,9 +182,6 @@ def sync_excel_data():
         return 0, str(e)
 
 init_db()
-if "initial_sync_done" not in st.session_state:
-    sync_excel_data()
-    st.session_state.initial_sync_done = True
 
 # --- Authentication Logic ---
 if "logged_in" not in st.session_state:
@@ -218,15 +228,15 @@ if not st.session_state.logged_in:
                 
     with col2:
         st.info("""
-        **Login Instructions:**
+        **Login Guide:**
         - **Teacher (Admin):**
-          - Username: `admin` | Password: `admin123`
-        - **Class 12-B Students:**
-          - **Login ID:** Student ka Name
-          - **Password:** Student ka S.R. NO.
+          - ID: `admin` | Password: `admin123`
+        - **Students:**
+          - **Login ID:** Apna Name (e.g. `ABHIMANYU YADAV`)
+          - **Password:** Apna S.R. NO. (e.g. `38954`)
         """)
 
-# --- Authenticated App ---
+# --- Authenticated Dashboards ---
 else:
     user_row = st.session_state.user_data
     role = user_row[28]
@@ -303,17 +313,18 @@ else:
                     st.rerun()
 
         with tab2:
-            st.subheader("Class 12-B Master Student Records")
+            st.subheader("Class 12-B Master Student Records (Clean Data)")
             try:
                 students_df = pd.read_sql_query("""
                     SELECT roll_no, sr_no, student_name, student_name_hindi, father_name, 
                            dob, aadhar_no, pen_no, mob_no, email_id, address 
-                    FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC, roll_no ASC
+                    FROM students WHERE role='Student' 
+                    ORDER BY CAST(roll_no AS INTEGER) ASC
                 """, conn)
             except Exception:
                 students_df = pd.DataFrame()
 
-            st.write(f"Total Registered Students: **{len(students_df)}**")
+            st.write(f"Total Active Students: **{len(students_df)}**")
             st.dataframe(students_df, use_container_width=True)
             
             if not students_df.empty:
@@ -322,10 +333,11 @@ else:
 
         with tab3:
             st.subheader("Sync with studentport.xlsx")
-            if st.button("🔄 Sync Now", type="primary"):
+            st.write("Click below to clean all decimals and refresh data:")
+            if st.button("🔄 Sync & Clean Data Now", type="primary"):
                 count, msg = sync_excel_data()
                 if count > 0:
-                    st.success(f"{count} students ka data bina decimal ke sync ho gaya!")
+                    st.success(f"{count} students ka data bina decimal ke successfully clean & load ho gaya!")
                     st.rerun()
                 else:
                     st.error(f"Sync error: {msg}")
