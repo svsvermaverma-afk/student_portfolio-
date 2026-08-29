@@ -19,7 +19,7 @@ def clean_val(val):
         val_str = val_str.split('.')[0]
     return val_str
 
-# --- Database Setup ---
+# --- Database Connection & Safe Auto-Migration ---
 def get_db_connection():
     return sqlite3.connect("class12b_portfolio.db", check_same_thread=False)
 
@@ -27,7 +27,7 @@ def init_db():
     conn = get_db_connection()
     c = conn.cursor()
     
-    # Students Table
+    # 1. Base Students Table
     c.execute('''
         CREATE TABLE IF NOT EXISTS students (
             roll_no TEXT,
@@ -64,16 +64,16 @@ def init_db():
         )
     ''')
     
-    # Portfolio Submissions Table with CBSE Rubrics
+    # 2. Base Portfolio Table
     c.execute('''
         CREATE TABLE IF NOT EXISTS portfolio (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             student_username TEXT,
-            portfolio_section TEXT NOT NULL,
+            portfolio_section TEXT DEFAULT 'General',
             category TEXT NOT NULL,
             title TEXT NOT NULL,
             description TEXT,
-            learning_reflection TEXT,
+            learning_reflection TEXT DEFAULT '',
             project_link TEXT,
             rubric_regularity INTEGER DEFAULT 0,
             rubric_authenticity INTEGER DEFAULT 0,
@@ -86,6 +86,41 @@ def init_db():
         )
     ''')
     
+    # --- Auto-Migration (Adds missing columns dynamically if DB exists) ---
+    c.execute("PRAGMA table_info(students)")
+    student_cols = [row[1] for row in c.fetchall()]
+    
+    if "academic_goals" not in student_cols:
+        c.execute("ALTER TABLE students ADD COLUMN academic_goals TEXT DEFAULT ''")
+    if "strengths_weaknesses" not in student_cols:
+        c.execute("ALTER TABLE students ADD COLUMN strengths_weaknesses TEXT DEFAULT ''")
+        
+    c.execute("PRAGMA table_info(portfolio)")
+    portfolio_cols = [row[1] for row in c.fetchall()]
+    
+    if "portfolio_section" not in portfolio_cols:
+        c.execute("ALTER TABLE portfolio ADD COLUMN portfolio_section TEXT DEFAULT 'General'")
+    if "learning_reflection" not in portfolio_cols:
+        c.execute("ALTER TABLE portfolio ADD COLUMN learning_reflection TEXT DEFAULT ''")
+    if "rubric_regularity" not in portfolio_cols:
+        c.execute("ALTER TABLE portfolio ADD COLUMN rubric_regularity INTEGER DEFAULT 0")
+    if "rubric_authenticity" not in portfolio_cols:
+        c.execute("ALTER TABLE portfolio ADD COLUMN rubric_authenticity INTEGER DEFAULT 0")
+    if "rubric_reflection" not in portfolio_cols:
+        c.execute("ALTER TABLE portfolio ADD COLUMN rubric_reflection INTEGER DEFAULT 0")
+    if "rubric_creativity" not in portfolio_cols:
+        c.execute("ALTER TABLE portfolio ADD COLUMN rubric_creativity INTEGER DEFAULT 0")
+    if "total_marks" not in portfolio_cols:
+        c.execute("ALTER TABLE portfolio ADD COLUMN total_marks INTEGER DEFAULT 0")
+
+    # Clean existing .0 decimals in passwords or sr_no
+    try:
+        c.execute("UPDATE students SET password = REPLACE(password, '.0', '') WHERE password LIKE '%.0'")
+        c.execute("UPDATE students SET sr_no = REPLACE(sr_no, '.0', '') WHERE sr_no LIKE '%.0'")
+        c.execute("UPDATE students SET roll_no = REPLACE(roll_no, '.0', '') WHERE roll_no LIKE '%.0'")
+    except Exception:
+        pass
+
     # Ensure Admin Account
     c.execute("SELECT * FROM students WHERE username = 'admin'")
     if not c.fetchone():
@@ -260,7 +295,7 @@ else:
     conn = get_db_connection()
 
     # ==========================================
-    # 1. TEACHER DASHBOARD (CBSE RUBRICS EVALUATION)
+    # 1. TEACHER DASHBOARD
     # ==========================================
     if role == "Teacher":
         st.title("👨‍🏫 Teacher Evaluation & Assessment Panel - Class 12-B")
@@ -323,7 +358,7 @@ else:
                 with c_r4:
                     r_creat = st.slider("Creativity / Effort (0-5)", 0, 5, 4)
                 
-                total_calculated = r_reg + r_auth + r_refl + r_creat  # Out of 20
+                total_calculated = r_reg + r_auth + r_refl + r_creat
                 final_grade_str = f"{total_calculated}/20"
                 
                 new_feedback = st.text_input("Teacher's Feedback / Remarks", value=sel_row['feedback'])
@@ -359,7 +394,7 @@ else:
                 st.rerun()
 
     # ==========================================
-    # 2. STUDENT DASHBOARD (5-SECTION CBSE PORTFOLIO)
+    # 2. STUDENT DASHBOARD
     # ==========================================
     else:
         st.title(f"🎓 Student Portfolio - {student_name}")
@@ -375,10 +410,13 @@ else:
         # --- TAB 1: Complete Portfolio ---
         with tab_s1:
             st.subheader("Submitted Portfolio Artifacts")
-            my_port = pd.read_sql_query(
-                "SELECT * FROM portfolio WHERE student_username=? ORDER BY id DESC",
-                conn, params=(student_username,)
-            )
+            try:
+                my_port = pd.read_sql_query(
+                    "SELECT * FROM portfolio WHERE student_username=? ORDER BY id DESC",
+                    conn, params=(student_username,)
+                )
+            except Exception:
+                my_port = pd.DataFrame()
             
             if my_port.empty:
                 st.info("Aapka portfolio khali hai. Naya kaam submit karne ke liye 'Submit New Artifact' tab par jayein.")
@@ -396,10 +434,10 @@ else:
                             st.write(f"**My Self-Reflection:** {row['learning_reflection']}")
                             st.divider()
                             st.write(f"👨‍🏫 **Teacher's Feedback:** {row['feedback']}")
-                            if row['total_marks'] > 0:
+                            if row.get('total_marks', 0) > 0:
                                 st.write(f"**Rubric Marks Breakdown:** Regularity: {row['rubric_regularity']}/5 | Authenticity: {row['rubric_authenticity']}/5 | Reflection: {row['rubric_reflection']}/5 | Creativity: {row['rubric_creativity']}/5")
 
-        # --- TAB 2: Submit New Work under 5 Pillars ---
+        # --- TAB 2: Submit New Work ---
         with tab_s2:
             st.subheader("Add Artifact to Portfolio")
             with st.form("cbse_portfolio_submission_form"):
@@ -411,7 +449,6 @@ else:
                     "5. Self & Peer Assessment (Reflections & Group Feedback)"
                 ])
                 
-                # Category mapping based on standard sections
                 if "Academic" in section:
                     cat_options = ["Best Classwork / Notes Sample", "Unit Test Paper with Correction", "Error Analysis & Learning Sheet", "Assignment / Worksheet"]
                 elif "Projects" in section:
@@ -443,28 +480,35 @@ else:
                     else:
                         st.error("Title dena zaroori hai.")
 
-        # --- TAB 3: Student Profile & Goals ---
+        # --- TAB 3: Student Profile & Goals (Safe Fetch) ---
         with tab_s3:
             st.subheader("🎯 Student Profile, Interests & Academic Goals")
             st.caption("Introductory Section - Set your aspirations and strengths for the session.")
             
-            c = conn.cursor()
-            c.execute("SELECT academic_goals, strengths_weaknesses FROM students WHERE username=?", (student_username,))
-            res = c.fetchone()
-            curr_goals = res[0] if res and res[0] else ""
-            curr_sw = res[1] if res and res[1] else ""
+            curr_goals = ""
+            curr_sw = ""
+            try:
+                c = conn.cursor()
+                c.execute("SELECT academic_goals, strengths_weaknesses FROM students WHERE username=?", (student_username,))
+                res = c.fetchone()
+                if res:
+                    curr_goals = res[0] if res[0] else ""
+                    curr_sw = res[1] if res[1] else ""
+            except Exception:
+                pass
             
             with st.form("goals_form"):
                 goals = st.text_area("My Academic & Career Goals for Class 12:", value=curr_goals, placeholder="e.g., Score 90%+ in Board Exams, Master Physics Numericals, Prepare for Competitive Exams...")
                 sw = st.text_area("My Strengths & Areas to Improve:", value=curr_sw, placeholder="e.g., Strength: Problem Solving & Diagrams | Improvement: Time Management during Unit Tests")
                 
                 if st.form_submit_button("Save Goals & Profile"):
+                    c = conn.cursor()
                     c.execute("UPDATE students SET academic_goals=?, strengths_weaknesses=? WHERE username=?", (goals, sw, student_username))
                     conn.commit()
                     st.success("Profile goals updated successfully!")
                     st.rerun()
 
-        # --- TAB 4: Official Profile Details ---
+        # --- TAB 4: Official Details ---
         with tab_s4:
             st.subheader("1. Introductory Section - Official Student Profile")
             c1, c2 = st.columns(2)
