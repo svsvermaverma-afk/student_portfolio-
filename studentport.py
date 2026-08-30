@@ -217,9 +217,10 @@ def ensure_database_populated():
 
 ensure_database_populated()
 
-# --- Authentication Logic ---
+# --- Session State Management (Safe Init) ---
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
+if "username" not in st.session_state:
     st.session_state.username = ""
 
 def login_user(entered_user, entered_pass):
@@ -248,7 +249,7 @@ def logout_user():
     st.rerun()
 
 # --- Login UI ---
-if not st.session_state.logged_in:
+if not st.session_state.logged_in or not st.session_state.username:
     st.title("🎓 Class 12-B UP Board Continuous Portfolio Portal")
     st.caption("माध्यमिक शिक्षा परिषद्, उत्तर प्रदेश - आंतरिक मूल्यांकन एवं पोर्टफोलियो प्रबंधन")
     
@@ -574,7 +575,7 @@ else:
             with col_p2:
                 st.caption("Tip: Browser me **Save as PDF** select karke is 2-page portfolio card ko download kar sakte hain.")
 
-        # --- TAB 2: UPLOAD PHOTO (STUDENT SIDE) ---
+        # --- TAB 2: UPLOAD PHOTO ---
         with tab_s2:
             st.subheader("🖼️ Upload Passport Size Photo")
             st.caption("Aapki photo portfolio card ke Page 1 par display hogi.")
