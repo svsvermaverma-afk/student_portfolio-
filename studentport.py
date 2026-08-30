@@ -1,10 +1,10 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 import os
 import re
 import base64
 from datetime import datetime
+from sqlalchemy import create_engine, text
 
 # --- Page Config ---
 st.set_page_config(page_title="Class 12-B UP Board Portfolio Portal", page_icon="🎓", layout="wide")
@@ -28,102 +28,113 @@ def safe_b64_decode(data_str):
     except Exception:
         return None
 
-# --- Database Connection & Setup ---
-def get_db_connection():
-    return sqlite3.connect("class12b_portfolio.db", check_same_thread=False)
+# --- Zero-Data-Loss Cloud Database Connection ---
+@st.cache_resource
+def get_engine():
+    # Priority 1: Supabase / PostgreSQL Cloud Database (Zero Data Loss)
+    if "DB_URL" in st.secrets:
+        db_uri = st.secrets["DB_URL"]
+        # Handle SQLAlchemy dialect compatibility
+        if db_uri.startswith("postgres://"):
+            db_uri = db_uri.replace("postgres://", "postgresql://", 1)
+        return create_engine(db_uri, pool_pre_ping=True)
+    # Priority 2: Fallback Local SQLite
+    return create_engine("sqlite:///class12b_portfolio.db")
+
+engine = get_engine()
 
 def init_db():
-    conn = get_db_connection()
-    c = conn.cursor()
-    
-    # Students Master Table
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS students (
-            roll_no TEXT,
-            username TEXT PRIMARY KEY,
-            password TEXT NOT NULL,
-            class_name TEXT DEFAULT '12-B',
-            sr_no TEXT,
-            roll_no_10th TEXT,
-            pen_no TEXT,
-            aadhar_no TEXT,
-            dob TEXT,
-            dob_dd TEXT,
-            dob_mm TEXT,
-            dob_yyyy TEXT,
-            occupation TEXT,
-            ecode TEXT,
-            dept TEXT,
-            student_name TEXT NOT NULL,
-            student_name_hindi TEXT,
-            father_name TEXT,
-            father_name_hindi TEXT,
-            mother_name TEXT,
-            mother_name_hindi TEXT,
-            gender TEXT,
-            caste TEXT,
-            category TEXT,
-            religion TEXT,
-            address TEXT,
-            mob_no TEXT,
-            email_id TEXT,
-            academic_goals TEXT DEFAULT '',
-            strengths_weaknesses TEXT DEFAULT '',
-            photo_b64 TEXT DEFAULT '',
-            role TEXT DEFAULT 'Student'
-        )
-    ''')
-    
-    # Portfolio Table
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS portfolio (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_username TEXT,
-            portfolio_section TEXT DEFAULT 'General',
-            category TEXT NOT NULL,
-            title TEXT NOT NULL,
-            description TEXT,
-            learning_reflection TEXT DEFAULT '',
-            project_link TEXT,
-            rubric_regularity INTEGER DEFAULT 0,
-            rubric_authenticity INTEGER DEFAULT 0,
-            rubric_reflection INTEGER DEFAULT 0,
-            rubric_creativity INTEGER DEFAULT 0,
-            total_marks INTEGER DEFAULT 0,
-            grade TEXT DEFAULT 'Pending Evaluation',
-            feedback TEXT DEFAULT 'No feedback yet',
-            submitted_on TEXT
-        )
-    ''')
-    
-    # Safe Migration
-    c.execute("PRAGMA table_info(students)")
-    student_cols = [row[1] for row in c.fetchall()]
-    if "photo_b64" not in student_cols:
-        c.execute("ALTER TABLE students ADD COLUMN photo_b64 TEXT DEFAULT ''")
-    if "academic_goals" not in student_cols:
-        c.execute("ALTER TABLE students ADD COLUMN academic_goals TEXT DEFAULT ''")
-    if "strengths_weaknesses" not in student_cols:
-        c.execute("ALTER TABLE students ADD COLUMN strengths_weaknesses TEXT DEFAULT ''")
-
-    # Clean existing decimal traces in db
-    try:
-        c.execute("UPDATE students SET password = REPLACE(password, '.0', '') WHERE password LIKE '%.0'")
-        c.execute("UPDATE students SET sr_no = REPLACE(sr_no, '.0', '') WHERE sr_no LIKE '%.0'")
-        c.execute("UPDATE students SET roll_no = REPLACE(roll_no, '.0', '') WHERE roll_no LIKE '%.0'")
-    except Exception:
-        pass
-
-    # Ensure Admin Exists
-    c.execute("SELECT * FROM students WHERE username = 'admin'")
-    if not c.fetchone():
-        c.execute("""
-            INSERT OR REPLACE INTO students (roll_no, username, password, student_name, role, class_name)
-            VALUES ('ADMIN01', 'admin', 'admin123', 'Class Teacher (12-B)', 'Teacher', '12-B')
-        """)
+    with engine.begin() as conn:
+        # Students Master Table
+        conn.execute(text('''
+            CREATE TABLE IF NOT EXISTS students (
+                roll_no TEXT,
+                username TEXT PRIMARY KEY,
+                password TEXT NOT NULL,
+                class_name TEXT DEFAULT '12-B',
+                sr_no TEXT,
+                roll_no_10th TEXT,
+                pen_no TEXT,
+                aadhar_no TEXT,
+                dob TEXT,
+                dob_dd TEXT,
+                dob_mm TEXT,
+                dob_yyyy TEXT,
+                occupation TEXT,
+                ecode TEXT,
+                dept TEXT,
+                student_name TEXT NOT NULL,
+                student_name_hindi TEXT,
+                father_name TEXT,
+                father_name_hindi TEXT,
+                mother_name TEXT,
+                mother_name_hindi TEXT,
+                gender TEXT,
+                caste TEXT,
+                category TEXT,
+                religion TEXT,
+                address TEXT,
+                mob_no TEXT,
+                email_id TEXT,
+                academic_goals TEXT DEFAULT '',
+                strengths_weaknesses TEXT DEFAULT '',
+                photo_b64 TEXT DEFAULT '',
+                role TEXT DEFAULT 'Student'
+            )
+        '''))
         
-    conn.commit()
-    conn.close()
+        # Portfolio Table
+        # SERIAL / AUTOINCREMENT handling for PostgreSQL vs SQLite
+        if "postgresql" in str(engine.url):
+            conn.execute(text('''
+                CREATE TABLE IF NOT EXISTS portfolio (
+                    id SERIAL PRIMARY KEY,
+                    student_username TEXT,
+                    portfolio_section TEXT DEFAULT 'General',
+                    category TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    learning_reflection TEXT DEFAULT '',
+                    project_link TEXT,
+                    rubric_regularity INTEGER DEFAULT 0,
+                    rubric_authenticity INTEGER DEFAULT 0,
+                    rubric_reflection INTEGER DEFAULT 0,
+                    rubric_creativity INTEGER DEFAULT 0,
+                    total_marks INTEGER DEFAULT 0,
+                    grade TEXT DEFAULT 'Pending Evaluation',
+                    feedback TEXT DEFAULT 'No feedback yet',
+                    submitted_on TEXT
+                )
+            '''))
+        else:
+            conn.execute(text('''
+                CREATE TABLE IF NOT EXISTS portfolio (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    student_username TEXT,
+                    portfolio_section TEXT DEFAULT 'General',
+                    category TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    learning_reflection TEXT DEFAULT '',
+                    project_link TEXT,
+                    rubric_regularity INTEGER DEFAULT 0,
+                    rubric_authenticity INTEGER DEFAULT 0,
+                    rubric_reflection INTEGER DEFAULT 0,
+                    rubric_creativity INTEGER DEFAULT 0,
+                    total_marks INTEGER DEFAULT 0,
+                    grade TEXT DEFAULT 'Pending Evaluation',
+                    feedback TEXT DEFAULT 'No feedback yet',
+                    submitted_on TEXT
+                )
+            '''))
+
+        # Ensure Admin Account Exists
+        res = conn.execute(text("SELECT username FROM students WHERE username = 'admin'")).fetchone()
+        if not res:
+            conn.execute(text("""
+                INSERT INTO students (roll_no, username, password, student_name, role, class_name)
+                VALUES ('ADMIN01', 'admin', 'admin123', 'Class Teacher (12-B)', 'Teacher', '12-B')
+            """))
 
 # --- Deep File Locator for Excel ---
 def find_excel_file():
@@ -141,86 +152,93 @@ def sync_excel_data():
 
     try:
         df_excel = pd.read_excel(target_file, dtype=str)
-        conn = get_db_connection()
-        c = conn.cursor()
-        
-        c.execute("SELECT username, photo_b64 FROM students WHERE photo_b64 != ''")
-        existing_photos = dict(c.fetchall())
-        
-        c.execute("DELETE FROM students WHERE role='Student'")
-        
-        success_count = 0
-        for _, row in df_excel.iterrows():
-            s_name = clean_val(row.get("STUDENT'S NAME", ""))
-            sr_no = clean_val(row.get("S.R. NO.", ""))
-            r_no = clean_val(row.get("ROLL NO.", ""))
+        with engine.begin() as conn:
+            # Preserve existing photos & goals
+            res_p = conn.execute(text("SELECT username, photo_b64, academic_goals, strengths_weaknesses FROM students WHERE role='Student'")).fetchall()
+            existing_meta = {row[0]: (row[1], row[2], row[3]) for row in res_p}
             
-            if not s_name or s_name.lower() in ["nan", "nat", "null"] or r_no == "0":
-                continue
+            # Refresh student list
+            conn.execute(text("DELETE FROM students WHERE role='Student'"))
             
-            login_username = " ".join(s_name.split())
-            login_password = sr_no if sr_no else "123456"
-            saved_photo = existing_photos.get(login_username, "")
-            
-            dob_val = clean_val(row.get("D.O.B.", ""))
-            if "00:00:00" in dob_val:
-                dob_val = dob_val.replace("00:00:00", "").strip()
-            
-            c.execute("""
-                INSERT OR REPLACE INTO students (
-                    roll_no, username, password, class_name, sr_no, roll_no_10th, 
-                    pen_no, aadhar_no, dob, dob_dd, dob_mm, dob_yyyy, 
-                    occupation, ecode, dept, student_name, student_name_hindi, 
-                    father_name, father_name_hindi, mother_name, mother_name_hindi, 
-                    gender, caste, category, religion, address, mob_no, email_id, photo_b64, role
-                ) VALUES (?, ?, ?, '12-B', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Student')
-            """, (
-                r_no, login_username, login_password,
-                sr_no,
-                clean_val(row.get("roll numer 10th", "")),
-                clean_val(row.get("PEN NUMBER", "")),
-                clean_val(row.get("AADHAR NO.", "")),
-                dob_val,
-                clean_val(row.get("DD", "")),
-                clean_val(row.get("MM", "")),
-                clean_val(row.get("YYYY", "")),
-                clean_val(row.get("OCCUPATION Other-OTH / Hindalco -HE / Hindalco Supply- HS", "")),
-                clean_val(row.get("E.CODE", "")),
-                clean_val(row.get("DEPT.", "")),
-                login_username,
-                clean_val(row.get("STUDENT NAME IN HINDI", "")),
-                clean_val(row.get("FATHER'S NAME", "")),
-                clean_val(row.get("FATHER'S NAME IN HINDI", "")),
-                clean_val(row.get("MOTHER'S NAME", "")),
-                clean_val(row.get("MOTHER'S NAME IN HINDI", "")),
-                clean_val(row.get("GENDER", "")),
-                clean_val(row.get("CASTE", "")),
-                clean_val(row.get("CAT.", "")),
-                clean_val(row.get("RELIGION", "")),
-                clean_val(row.get("ADDRESS", "")),
-                clean_val(row.get("MOB. NO.", "")),
-                clean_val(row.get("EMAIL ID", "")),
-                saved_photo
-            ))
-            success_count += 1
-            
-        conn.commit()
-        conn.close()
+            success_count = 0
+            for _, row in df_excel.iterrows():
+                s_name = clean_val(row.get("STUDENT'S NAME", ""))
+                sr_no = clean_val(row.get("S.R. NO.", ""))
+                r_no = clean_val(row.get("ROLL NO.", ""))
+                
+                if not s_name or s_name.lower() in ["nan", "nat", "null"] or r_no == "0":
+                    continue
+                
+                login_username = " ".join(s_name.split())
+                login_password = sr_no if sr_no else "123456"
+                
+                saved_photo, saved_goals, saved_sw = existing_meta.get(login_username, ("", "", ""))
+                
+                dob_val = clean_val(row.get("D.O.B.", ""))
+                if "00:00:00" in dob_val:
+                    dob_val = dob_val.replace("00:00:00", "").strip()
+                
+                conn.execute(text("""
+                    INSERT INTO students (
+                        roll_no, username, password, class_name, sr_no, roll_no_10th, 
+                        pen_no, aadhar_no, dob, dob_dd, dob_mm, dob_yyyy, 
+                        occupation, ecode, dept, student_name, student_name_hindi, 
+                        father_name, father_name_hindi, mother_name, mother_name_hindi, 
+                        gender, caste, category, religion, address, mob_no, email_id, 
+                        academic_goals, strengths_weaknesses, photo_b64, role
+                    ) VALUES (
+                        :r_no, :u_name, :p_word, '12-B', :sr_no, :r_10, 
+                        :pen, :aadhar, :dob, :dd, :mm, :yyyy, 
+                        :occ, :ecode, :dept, :s_name, :s_name_h, 
+                        :f_name, :f_name_h, :m_name, :m_name_h, 
+                        :gen, :caste, :cat, :rel, :addr, :mob, :email, 
+                        :goals, :sw, :photo, 'Student'
+                    )
+                """), {
+                    "r_no": r_no, "u_name": login_username, "p_word": login_password,
+                    "sr_no": sr_no,
+                    "r_10": clean_val(row.get("roll numer 10th", "")),
+                    "pen": clean_val(row.get("PEN NUMBER", "")),
+                    "aadhar": clean_val(row.get("AADHAR NO.", "")),
+                    "dob": dob_val,
+                    "dd": clean_val(row.get("DD", "")),
+                    "mm": clean_val(row.get("MM", "")),
+                    "yyyy": clean_val(row.get("YYYY", "")),
+                    "occ": clean_val(row.get("OCCUPATION Other-OTH / Hindalco -HE / Hindalco Supply- HS", "")),
+                    "ecode": clean_val(row.get("E.CODE", "")),
+                    "dept": clean_val(row.get("DEPT.", "")),
+                    "s_name": login_username,
+                    "s_name_h": clean_val(row.get("STUDENT NAME IN HINDI", "")),
+                    "f_name": clean_val(row.get("FATHER'S NAME", "")),
+                    "f_name_h": clean_val(row.get("FATHER'S NAME IN HINDI", "")),
+                    "m_name": clean_val(row.get("MOTHER'S NAME", "")),
+                    "m_name_h": clean_val(row.get("MOTHER'S NAME IN HINDI", "")),
+                    "gen": clean_val(row.get("GENDER", "")),
+                    "caste": clean_val(row.get("CASTE", "")),
+                    "cat": clean_val(row.get("CAT.", "")),
+                    "rel": clean_val(row.get("RELIGION", "")),
+                    "addr": clean_val(row.get("ADDRESS", "")),
+                    "mob": clean_val(row.get("MOB. NO.", "")),
+                    "email": clean_val(row.get("EMAIL ID", "")),
+                    "goals": saved_goals,
+                    "sw": saved_sw,
+                    "photo": saved_photo
+                })
+                success_count += 1
+                
         return success_count, "Success"
     except Exception as e:
         return 0, f"Excel Reading Error: {str(e)}"
 
 init_db()
 
-# Auto self-healing check
+# Auto self-healing check on startup
 def ensure_database_populated():
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM students WHERE role='Student'")
-    count = c.fetchone()[0]
-    conn.close()
-    if count == 0:
-        sync_excel_data()
+    with engine.connect() as conn:
+        res = conn.execute(text("SELECT COUNT(*) FROM students WHERE role='Student'")).fetchone()
+        count = res[0] if res else 0
+        if count == 0:
+            sync_excel_data()
 
 ensure_database_populated()
 
@@ -353,19 +371,16 @@ def login_user(entered_user, entered_pass):
     pass_clean = entered_pass.strip()
     pass_variants = [pass_clean, pass_clean + ".0", pass_clean.replace(".0", "")]
     
-    conn = get_db_connection()
-    c = conn.cursor()
-    for p in set(pass_variants):
-        c.execute("""
-            SELECT username FROM students 
-            WHERE (LOWER(TRIM(username)) = LOWER(?) OR LOWER(TRIM(student_name)) = LOWER(?)) 
-            AND (TRIM(password) = ? OR TRIM(sr_no) = ?)
-        """, (user_clean, user_clean, p, p))
-        res = c.fetchone()
-        if res:
-            conn.close()
-            return res[0]
-    conn.close()
+    with engine.connect() as conn:
+        for p in set(pass_variants):
+            query = text("""
+                SELECT username FROM students 
+                WHERE (LOWER(TRIM(username)) = LOWER(:u) OR LOWER(TRIM(student_name)) = LOWER(:u)) 
+                AND (TRIM(password) = :p OR TRIM(sr_no) = :p)
+            """)
+            res = conn.execute(query, {"u": user_clean, "p": p}).fetchone()
+            if res:
+                return res[0]
     return None
 
 def logout_user():
@@ -401,13 +416,12 @@ if not st.session_state.logged_in or not st.session_state.username:
         - **Password:** Apna **S.R. Number** enter karein.
         """)
 
-# --- Authenticated App ---
+# --- Authenticated Interface ---
 else:
-    conn = get_db_connection()
-    user_df = pd.read_sql_query("SELECT * FROM students WHERE username=?", conn, params=(st.session_state.username,))
+    with engine.connect() as conn:
+        user_df = pd.read_sql_query(text("SELECT * FROM students WHERE username=:u"), conn, params={"u": st.session_state.username})
     
     if user_df.empty:
-        conn.close()
         logout_user()
 
     user_dict = user_df.iloc[0].to_dict()
@@ -431,7 +445,6 @@ else:
         st.write("**Class & Section:** 12-B")
         st.divider()
         if st.button("Logout", use_container_width=True):
-            conn.close()
             logout_user()
 
     # ==========================================
@@ -452,15 +465,16 @@ else:
         with tab1:
             st.subheader("Submitted Student Portfolios")
             try:
-                query = """
-                    SELECT p.id, s.roll_no, s.student_name, s.sr_no, p.portfolio_section, 
-                           p.category, p.title, p.description, p.learning_reflection, 
-                           p.project_link, p.total_marks, p.grade, p.feedback, p.submitted_on
-                    FROM portfolio p
-                    LEFT JOIN students s ON p.student_username = s.username
-                    ORDER BY p.id DESC
-                """
-                df_port = pd.read_sql_query(query, conn)
+                with engine.connect() as conn:
+                    query = text("""
+                        SELECT p.id, s.roll_no, s.student_name, s.sr_no, p.portfolio_section, 
+                               p.category, p.title, p.description, p.learning_reflection, 
+                               p.project_link, p.total_marks, p.grade, p.feedback, p.submitted_on
+                        FROM portfolio p
+                        LEFT JOIN students s ON p.student_username = s.username
+                        ORDER BY p.id DESC
+                    """)
+                    df_port = pd.read_sql_query(query, conn)
             except Exception:
                 df_port = pd.DataFrame()
             
@@ -506,21 +520,24 @@ else:
                 new_feedback = st.text_input("Teacher's Feedback / Remarks", value=sel_row['feedback'])
                 
                 if st.button("Save Assessment", type="primary"):
-                    c = conn.cursor()
-                    c.execute("""
-                        UPDATE portfolio 
-                        SET rubric_regularity=?, rubric_authenticity=?, rubric_reflection=?, 
-                            rubric_creativity=?, total_marks=?, grade=?, feedback=?
-                        WHERE id=?
-                    """, (r_reg, r_auth, r_refl, r_creat, total_calculated, final_grade_str, new_feedback, selected_pid))
-                    conn.commit()
+                    with engine.begin() as conn:
+                        conn.execute(text("""
+                            UPDATE portfolio 
+                            SET rubric_regularity=:r1, rubric_authenticity=:r2, rubric_reflection=:r3, 
+                                rubric_creativity=:r4, total_marks=:tot, grade=:grd, feedback=:fb
+                            WHERE id=:pid
+                        """), {
+                            "r1": r_reg, "r2": r_auth, "r3": r_refl, "r4": r_creat,
+                            "tot": total_calculated, "grd": final_grade_str, "fb": new_feedback, "pid": selected_pid
+                        })
                     st.success("Marks & Rubric Saved Successfully!")
                     st.rerun()
 
         # TAB 2: Admin View & Download Student Portfolios
         with tab2:
             st.subheader("🎴 View & Download Individual Student Portfolio Cards")
-            all_stus = pd.read_sql_query("SELECT username, student_name, roll_no FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC", conn)
+            with engine.connect() as conn:
+                all_stus = pd.read_sql_query(text("SELECT username, student_name, roll_no FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC"), conn)
             
             if all_stus.empty:
                 st.warning("Koi students available nahi hain.")
@@ -531,8 +548,9 @@ else:
                     format_func=lambda x: f"Roll {all_stus[all_stus['username']==x]['roll_no'].values[0]} - {all_stus[all_stus['username']==x]['student_name'].values[0]}"
                 )
                 
-                target_stu_data = pd.read_sql_query("SELECT * FROM students WHERE username=?", conn, params=(target_stu_user,)).iloc[0].to_dict()
-                target_stu_items = pd.read_sql_query("SELECT * FROM portfolio WHERE student_username=? ORDER BY id DESC", conn, params=(target_stu_user,))
+                with engine.connect() as conn:
+                    target_stu_data = pd.read_sql_query(text("SELECT * FROM students WHERE username=:u"), conn, params={"u": target_stu_user}).iloc[0].to_dict()
+                    target_stu_items = pd.read_sql_query(text("SELECT * FROM portfolio WHERE student_username=:u ORDER BY id DESC"), conn, params={"u": target_stu_user})
                 
                 generated_html = generate_portfolio_html(target_stu_data, target_stu_items)
                 
@@ -555,7 +573,9 @@ else:
         with tab3:
             st.subheader("Class 12-B Master Records & Photo Management")
             with st.expander("📸 Upload / Update Student Photo (Teacher Panel)"):
-                students_list = pd.read_sql_query("SELECT username, student_name, roll_no FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC", conn)
+                with engine.connect() as conn:
+                    students_list = pd.read_sql_query(text("SELECT username, student_name, roll_no FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC"), conn)
+                
                 if not students_list.empty:
                     chosen_student = st.selectbox(
                         "Select Student to Upload Photo", 
@@ -566,19 +586,19 @@ else:
                     if t_uploaded_img is not None:
                         t_b64 = base64.b64encode(t_uploaded_img.read()).decode("utf-8")
                         if st.button("Save Photo for Selected Student", type="primary"):
-                            c = conn.cursor()
-                            c.execute("UPDATE students SET photo_b64=? WHERE username=?", (t_b64, chosen_student))
-                            conn.commit()
+                            with engine.begin() as conn:
+                                conn.execute(text("UPDATE students SET photo_b64=:p WHERE username=:u"), {"p": t_b64, "u": chosen_student})
                             st.success(f"Photo uploaded for {chosen_student}!")
                             st.rerun()
 
             try:
-                students_df = pd.read_sql_query("""
-                    SELECT roll_no, sr_no, student_name, student_name_hindi, father_name, 
-                           dob, aadhar_no, pen_no, mob_no, email_id, 
-                           CASE WHEN photo_b64 != '' THEN 'Uploaded ✅' ELSE 'Pending ❌' END AS Photo_Status
-                    FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC
-                """, conn)
+                with engine.connect() as conn:
+                    students_df = pd.read_sql_query(text("""
+                        SELECT roll_no, sr_no, student_name, student_name_hindi, father_name, 
+                               dob, aadhar_no, pen_no, mob_no, email_id, 
+                               CASE WHEN photo_b64 != '' THEN 'Uploaded ✅' ELSE 'Pending ❌' END AS photo_status
+                        FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC
+                    """), conn)
             except Exception:
                 students_df = pd.DataFrame()
 
@@ -595,8 +615,9 @@ else:
             c_del1, c_del2 = st.columns(2)
             with c_del1:
                 st.markdown("#### 1. Delete Specific Submission Entry")
-                del_query = "SELECT id, student_username, title, portfolio_section FROM portfolio ORDER BY id DESC"
-                del_items = pd.read_sql_query(del_query, conn)
+                with engine.connect() as conn:
+                    del_items = pd.read_sql_query(text("SELECT id, student_username, title, portfolio_section FROM portfolio ORDER BY id DESC"), conn)
+                
                 if not del_items.empty:
                     sel_sub_del = st.selectbox(
                         "Select Submission to Delete", 
@@ -604,9 +625,8 @@ else:
                         format_func=lambda x: f"ID {x}: {del_items[del_items['id']==x]['student_username'].values[0]} - {del_items[del_items['id']==x]['title'].values[0]}"
                     )
                     if st.button("Delete Selected Submission", type="secondary"):
-                        c = conn.cursor()
-                        c.execute("DELETE FROM portfolio WHERE id=?", (sel_sub_del,))
-                        conn.commit()
+                        with engine.begin() as conn:
+                            conn.execute(text("DELETE FROM portfolio WHERE id=:pid"), {"pid": sel_sub_del})
                         st.success("Submission successfully delete ho gaya!")
                         st.rerun()
                 else:
@@ -614,7 +634,9 @@ else:
 
             with c_del2:
                 st.markdown("#### 2. Delete Student Record")
-                all_stu_del = pd.read_sql_query("SELECT username, student_name, roll_no FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC", conn)
+                with engine.connect() as conn:
+                    all_stu_del = pd.read_sql_query(text("SELECT username, student_name, roll_no FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC"), conn)
+                
                 if not all_stu_del.empty:
                     sel_user_del = st.selectbox(
                         "Select Student to Remove", 
@@ -623,10 +645,9 @@ else:
                         key="del_stu_box"
                     )
                     if st.button("Delete Student & All Submissions", type="secondary"):
-                        c = conn.cursor()
-                        c.execute("DELETE FROM students WHERE username=?", (sel_user_del,))
-                        c.execute("DELETE FROM portfolio WHERE student_username=?", (sel_user_del,))
-                        conn.commit()
+                        with engine.begin() as conn:
+                            conn.execute(text("DELETE FROM students WHERE username=:u"), {"u": sel_user_del})
+                            conn.execute(text("DELETE FROM portfolio WHERE student_username=:u"), {"u": sel_user_del})
                         st.success(f"{sel_user_del} aur unke sabhi submissions permanently delete ho gaye!")
                         st.rerun()
                 else:
@@ -671,10 +692,11 @@ else:
             st.caption("माध्यमिक शिक्षा परिषद्, उत्तर प्रदेश - सत्र: 2026-27")
             
             try:
-                card_items = pd.read_sql_query(
-                    "SELECT * FROM portfolio WHERE student_username=? ORDER BY id DESC",
-                    conn, params=(student_username,)
-                )
+                with engine.connect() as conn:
+                    card_items = pd.read_sql_query(
+                        text("SELECT * FROM portfolio WHERE student_username=:u ORDER BY id DESC"),
+                        conn, params={"u": student_username}
+                    )
             except Exception:
                 card_items = pd.DataFrame()
             
@@ -714,9 +736,8 @@ else:
                     img_bytes = uploaded_img.read()
                     encoded_str = base64.b64encode(img_bytes).decode("utf-8")
                     if st.button("Save & Upload Photo", type="primary"):
-                        c = conn.cursor()
-                        c.execute("UPDATE students SET photo_b64=? WHERE username=?", (encoded_str, student_username))
-                        conn.commit()
+                        with engine.begin() as conn:
+                            conn.execute(text("UPDATE students SET photo_b64=:p WHERE username=:u"), {"p": encoded_str, "u": student_username})
                         st.success("Photo successfully upload ho gayi!")
                         st.rerun()
 
@@ -724,10 +745,11 @@ else:
         with tab_s3:
             st.subheader("My Portfolio Records")
             try:
-                my_port = pd.read_sql_query(
-                    "SELECT * FROM portfolio WHERE student_username=? ORDER BY id DESC",
-                    conn, params=(student_username,)
-                )
+                with engine.connect() as conn:
+                    my_port = pd.read_sql_query(
+                        text("SELECT * FROM portfolio WHERE student_username=:u ORDER BY id DESC"),
+                        conn, params={"u": student_username}
+                    )
             except Exception:
                 my_port = pd.DataFrame()
             
@@ -779,14 +801,17 @@ else:
                 if st.form_submit_button("Submit to Portfolio", type="primary"):
                     if title:
                         now_str = datetime.now().strftime("%d-%b-%Y %I:%M %p")
-                        c = conn.cursor()
-                        c.execute("""
-                            INSERT INTO portfolio (
-                                student_username, portfolio_section, category, title, 
-                                description, learning_reflection, project_link, submitted_on
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (student_username, section.split('.')[1].strip(), sub_category, title, description, reflection, link, now_str))
-                        conn.commit()
+                        with engine.begin() as conn:
+                            conn.execute(text("""
+                                INSERT INTO portfolio (
+                                    student_username, portfolio_section, category, title, 
+                                    description, learning_reflection, project_link, submitted_on
+                                ) VALUES (:u, :sec, :cat, :tit, :desc, :refl, :lnk, :sub_on)
+                            """), {
+                                "u": student_username, "sec": section.split('.')[1].strip(),
+                                "cat": sub_category, "tit": title, "desc": description,
+                                "refl": reflection, "lnk": link, "sub_on": now_str
+                            })
                         st.success("Artifact successfully submitted!")
                         st.rerun()
                     else:
@@ -803,9 +828,10 @@ else:
                 sw = st.text_area("My Strengths & Areas to Improve:", value=curr_sw if curr_sw else "")
                 
                 if st.form_submit_button("Save Goals"):
-                    c = conn.cursor()
-                    c.execute("UPDATE students SET academic_goals=?, strengths_weaknesses=? WHERE username=?", (goals, sw, student_username))
-                    conn.commit()
+                    with engine.begin() as conn:
+                        conn.execute(text("UPDATE students SET academic_goals=:g, strengths_weaknesses=:sw WHERE username=:u"), {
+                            "g": goals, "sw": sw, "u": student_username
+                        })
                     st.success("Goals updated!")
                     st.rerun()
 
@@ -827,5 +853,3 @@ else:
                 st.write(f"**Mobile:** {user_dict.get('mob_no', '')}")
                 st.write(f"**Email:** {user_dict.get('email_id', '')}")
                 st.write(f"**Address:** {user_dict.get('address', '')}")
-
-    conn.close()
