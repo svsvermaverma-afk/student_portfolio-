@@ -3,10 +3,11 @@ import sqlite3
 import pandas as pd
 import os
 import re
+import base64
 from datetime import datetime
 
 # --- Page Config ---
-st.set_page_config(page_title="Class 12-B CBSE Portfolio Portal", page_icon="🎓", layout="wide")
+st.set_page_config(page_title="Class 12-B UP Board Portfolio Portal", page_icon="🎓", layout="wide")
 
 # --- Cleaner Helper Function ---
 def clean_val(val):
@@ -19,7 +20,7 @@ def clean_val(val):
         val_str = val_str.split('.')[0]
     return val_str
 
-# --- Database Connection ---
+# --- Database Connection & Setup ---
 def get_db_connection():
     return sqlite3.connect("class12b_portfolio.db", check_same_thread=False)
 
@@ -60,6 +61,7 @@ def init_db():
             email_id TEXT,
             academic_goals TEXT DEFAULT '',
             strengths_weaknesses TEXT DEFAULT '',
+            photo_b64 TEXT DEFAULT '',
             role TEXT DEFAULT 'Student'
         )
     ''')
@@ -89,6 +91,8 @@ def init_db():
     # Safe Auto-Migration
     c.execute("PRAGMA table_info(students)")
     student_cols = [row[1] for row in c.fetchall()]
+    if "photo_b64" not in student_cols:
+        c.execute("ALTER TABLE students ADD COLUMN photo_b64 TEXT DEFAULT ''")
     if "academic_goals" not in student_cols:
         c.execute("ALTER TABLE students ADD COLUMN academic_goals TEXT DEFAULT ''")
     if "strengths_weaknesses" not in student_cols:
@@ -132,6 +136,10 @@ def sync_excel_data():
         conn = get_db_connection()
         c = conn.cursor()
         
+        # Keep existing photos during sync
+        c.execute("SELECT username, photo_b64 FROM students WHERE photo_b64 != ''")
+        existing_photos = dict(c.fetchall())
+        
         c.execute("DELETE FROM students WHERE role='Student'")
         
         success_count = 0
@@ -145,6 +153,7 @@ def sync_excel_data():
             
             login_username = " ".join(s_name.split())
             login_password = sr_no if sr_no else "123456"
+            saved_photo = existing_photos.get(login_username, "")
             
             dob_val = clean_val(row.get("D.O.B.", ""))
             if "00:00:00" in dob_val:
@@ -156,8 +165,8 @@ def sync_excel_data():
                     pen_no, aadhar_no, dob, dob_dd, dob_mm, dob_yyyy, 
                     occupation, ecode, dept, student_name, student_name_hindi, 
                     father_name, father_name_hindi, mother_name, mother_name_hindi, 
-                    gender, caste, category, religion, address, mob_no, email_id, role
-                ) VALUES (?, ?, ?, '12-B', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Student')
+                    gender, caste, category, religion, address, mob_no, email_id, photo_b64, role
+                ) VALUES (?, ?, ?, '12-B', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Student')
             """, (
                 r_no, login_username, login_password,
                 sr_no,
@@ -183,7 +192,8 @@ def sync_excel_data():
                 clean_val(row.get("RELIGION", "")),
                 clean_val(row.get("ADDRESS", "")),
                 clean_val(row.get("MOB. NO.", "")),
-                clean_val(row.get("EMAIL ID", ""))
+                clean_val(row.get("EMAIL ID", "")),
+                saved_photo
             ))
             success_count += 1
             
@@ -210,7 +220,7 @@ ensure_database_populated()
 # --- Authentication Logic ---
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
-    st.session_state.user_data = None
+    st.session_state.username = ""
 
 def login_user(entered_user, entered_pass):
     user_clean = " ".join(entered_user.strip().split())
@@ -221,26 +231,26 @@ def login_user(entered_user, entered_pass):
     c = conn.cursor()
     for p in set(pass_variants):
         c.execute("""
-            SELECT * FROM students 
+            SELECT username FROM students 
             WHERE (LOWER(TRIM(username)) = LOWER(?) OR LOWER(TRIM(student_name)) = LOWER(?)) 
             AND (TRIM(password) = ? OR TRIM(sr_no) = ?)
         """, (user_clean, user_clean, p, p))
-        user = c.fetchone()
-        if user:
+        res = c.fetchone()
+        if res:
             conn.close()
-            return user
+            return res[0]
     conn.close()
     return None
 
 def logout_user():
     st.session_state.logged_in = False
-    st.session_state.user_data = None
+    st.session_state.username = ""
     st.rerun()
 
 # --- Login UI ---
 if not st.session_state.logged_in:
-    st.title("🎓 Class 12-B Continuous & Comprehensive Portfolio Portal")
-    st.caption("Internal Assessment & Student Portfolio Management")
+    st.title("🎓 Class 12-B UP Board Continuous Portfolio Portal")
+    st.caption("माध्यमिक शिक्षा परिषद्, उत्तर प्रदेश - आंतरिक मूल्यांकन एवं पोर्टफोलियो प्रबंधन")
     
     col1, col2 = st.columns([1.2, 1])
     with col1:
@@ -250,11 +260,10 @@ if not st.session_state.logged_in:
         
         if st.button("Login", type="primary", use_container_width=True):
             ensure_database_populated()
-            user = login_user(user_input, pass_input)
-            if user:
+            valid_user = login_user(user_input, pass_input)
+            if valid_user:
                 st.session_state.logged_in = True
-                st.session_state.user_data = user
-                st.success(f"Welcome {user[15]}!")
+                st.session_state.username = valid_user
                 st.rerun()
             else:
                 st.error("Invalid Name or Password (S.R. No.)!")
@@ -262,41 +271,50 @@ if not st.session_state.logged_in:
     with col2:
         st.info("""
         **📌 Instructions for Students:**
-        - **Login ID:** Enter your full name as registered in school.
-        - **Password:** Enter your **S.R. Number**.
+        - **Login ID:** Apna School Record wala Name enter karein.
+        - **Password:** Apna **S.R. Number** enter karein.
         """)
 
 # --- Authenticated App ---
 else:
-    user_row = st.session_state.user_data
-    role = user_row[30] if len(user_row) > 30 else user_row[-1]
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM students WHERE username=?", (st.session_state.username,))
+    user_row = c.fetchone()
+    
+    if not user_row:
+        logout_user()
+
+    role = user_row[31] if len(user_row) > 31 else user_row[-1]
     student_roll = user_row[0]
     student_username = user_row[1]
     student_sr = user_row[4]
     student_name = user_row[15]
+    student_photo = user_row[30] if len(user_row) > 30 else ""
     
     with st.sidebar:
+        if student_photo:
+            st.image(base64.b64decode(student_photo), width=100)
         st.write(f"### 👋 **{student_name}**")
         st.badge(f"Role: {role}")
         if role == "Student":
             st.write(f"**Roll No:** {student_roll}")
             st.write(f"**S.R. No:** {student_sr}")
+        st.write("**Board:** UP BOARD")
         st.write("**Class & Section:** 12-B")
         st.divider()
         if st.button("Logout", use_container_width=True):
             logout_user()
 
-    conn = get_db_connection()
-
     # ==========================================
     # 1. TEACHER DASHBOARD
     # ==========================================
     if role == "Teacher":
-        st.title("👨‍🏫 Teacher Evaluation Panel - Class 12-B")
+        st.title("👨‍🏫 Teacher Evaluation Panel - Class 12-B (UP Board)")
         
         tab1, tab2, tab3 = st.tabs([
             "📑 Portfolio Assessment & Grading", 
-            "👥 Class Master Records", 
+            "👥 Class Master Records & Photo Upload", 
             "🔄 Excel File Status & Sync"
         ])
         
@@ -341,23 +359,22 @@ else:
                     if sel_row['project_link']:
                         st.markdown(f"🔗 **Attachment Link:** [{sel_row['project_link']}]({sel_row['project_link']})")
                 
-                st.markdown("##### 📝 CBSE Scoring Rubric (0-5 per Criteria)")
+                st.markdown("##### 📝 UP Board Internal Assessment Rubric (0-5 per Criteria)")
                 c_r1, c_r2, c_r3, c_r4 = st.columns(4)
                 with c_r1:
-                    r_reg = st.slider("Regularity (0-5)", 0, 5, 4)
+                    r_reg = st.slider("Regularity & Timeliness (0-5)", 0, 5, 4)
                 with c_r2:
-                    r_auth = st.slider("Authenticity (0-5)", 0, 5, 4)
+                    r_auth = st.slider("Quality & Authenticity (0-5)", 0, 5, 4)
                 with c_r3:
-                    r_refl = st.slider("Reflection (0-5)", 0, 5, 4)
+                    r_refl = st.slider("Reflection & Learning (0-5)", 0, 5, 4)
                 with c_r4:
-                    r_creat = st.slider("Creativity (0-5)", 0, 5, 4)
+                    r_creat = st.slider("Creativity & Presentation (0-5)", 0, 5, 4)
                 
                 total_calculated = r_reg + r_auth + r_refl + r_creat
                 final_grade_str = f"{total_calculated}/20"
                 new_feedback = st.text_input("Teacher's Feedback / Remarks", value=sel_row['feedback'])
                 
                 if st.button("Save Assessment", type="primary"):
-                    c = conn.cursor()
                     c.execute("""
                         UPDATE portfolio 
                         SET rubric_regularity=?, rubric_authenticity=?, rubric_reflection=?, 
@@ -369,11 +386,30 @@ else:
                     st.rerun()
 
         with tab2:
-            st.subheader("Class 12-B Master Records")
+            st.subheader("Class 12-B Master Records & Photo Management")
+            
+            with st.expander("📸 Upload / Update Student Photo (Teacher Panel)"):
+                students_list = pd.read_sql_query("SELECT username, student_name, roll_no FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC", conn)
+                if not students_list.empty:
+                    chosen_student = st.selectbox(
+                        "Select Student to Upload Photo", 
+                        students_list["username"].tolist(),
+                        format_func=lambda x: f"{students_list[students_list['username']==x]['roll_no'].values[0]} - {students_list[students_list['username']==x]['student_name'].values[0]}"
+                    )
+                    t_uploaded_img = st.file_uploader("Choose Student Passport Photo (JPG/PNG)", type=["jpg", "jpeg", "png"], key="teacher_photo_upload")
+                    if t_uploaded_img is not None:
+                        t_b64 = base64.b64encode(t_uploaded_img.read()).decode("utf-8")
+                        if st.button("Save Photo for Selected Student", type="primary"):
+                            c.execute("UPDATE students SET photo_b64=? WHERE username=?", (t_b64, chosen_student))
+                            conn.commit()
+                            st.success(f"Photo uploaded for {chosen_student}!")
+                            st.rerun()
+
             try:
                 students_df = pd.read_sql_query("""
                     SELECT roll_no, sr_no, student_name, student_name_hindi, father_name, 
-                           dob, aadhar_no, pen_no, mob_no, email_id, address 
+                           dob, aadhar_no, pen_no, mob_no, email_id, 
+                           CASE WHEN photo_b64 != '' THEN 'Uploaded ✅' ELSE 'Pending ❌' END AS Photo_Status
                     FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC
                 """, conn)
             except Exception:
@@ -405,27 +441,24 @@ else:
     # ==========================================
     else:
         st.title(f"🎓 Student Portfolio - {student_name}")
-        st.caption(f"S.R. No: {student_sr} | Roll No: {student_roll} | Class: 12-B")
+        st.caption(f"UP BOARD | S.R. No: {student_sr} | Roll No: {student_roll} | Class: 12-B")
         
-        tab_s1, tab_s2, tab_s3, tab_s4, tab_s5 = st.tabs([
+        tab_s1, tab_s2, tab_s3, tab_s4, tab_s5, tab_s6 = st.tabs([
             "🎴 2-Page Portfolio Card",
+            "🖼️ Upload / Change Photo",
             "📂 My Submissions Record", 
             "➕ Submit New Artifact / Work", 
             "🎯 Profile & Goal Setting",
             "👤 Official Details"
         ])
         
-        # --- TAB 1: 2-PAGE GREETING / PORTFOLIO CARD ---
+        # --- TAB 1: 2-PAGE PORTFOLIO CARD ---
         with tab_s1:
-            st.subheader("🎴 Official 2-Page Student Portfolio Card")
-            st.caption("Standard Assessment Portfolio - Session 2026-27")
+            st.subheader("🎴 UP Board Official Student Portfolio Card (2-Page)")
+            st.caption("माध्यमिक शिक्षा परिषद्, उत्तर प्रदेश - सत्र: 2026-27")
             
-            # Fetch goals and submissions
-            c = conn.cursor()
-            c.execute("SELECT academic_goals, strengths_weaknesses FROM students WHERE username=?", (student_username,))
-            res_goals = c.fetchone()
-            p_goals = res_goals[0] if res_goals and res_goals[0] else "Not specified yet."
-            p_sw = res_goals[1] if res_goals and res_goals[1] else "Not specified yet."
+            p_goals = user_row[28] if len(user_row) > 28 and user_row[28] else "Not specified yet."
+            p_sw = user_row[29] if len(user_row) > 29 and user_row[29] else "Not specified yet."
             
             try:
                 card_items = pd.read_sql_query(
@@ -455,12 +488,18 @@ else:
             hindi_name_str = f"({user_row[16]})" if user_row[16] else ""
             today_date_str = datetime.now().strftime('%d-%m-%Y')
 
-            # Render Page 1
+            # Display Photo or Avatar
+            if student_photo:
+                photo_html = f'<img src="data:image/jpeg;base64,{student_photo}" style="width: 90px; height: 110px; object-fit: cover; border-radius: 6px; border: 2px solid #1E3A8A;"/>'
+            else:
+                photo_html = '<div style="font-size: 40px;">🎓</div><div style="font-size: 10px; color: #94A3B8; margin-top: 4px;">Photo Pending</div>'
+
+            # Page 1
             st.markdown("### 📄 Page 1: Introductory & Student Profile")
             p1_html = f"""<div style="border: 2px solid #1E3A8A; border-radius: 10px; padding: 20px; background: #FFFFFF; font-family: sans-serif; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
 <div style="text-align: center; border-bottom: 2px solid #E2E8F0; padding-bottom: 10px; margin-bottom: 15px;">
-<h2 style="margin: 0; color: #1E3A8A; font-size: 20px; text-transform: uppercase;">SENIOR SECONDARY STUDENT PORTFOLIO</h2>
-<h4 style="margin: 4px 0 0 0; color: #475569; font-weight: normal; font-size: 14px;">Academic Session: 2026 - 2027 | Class: 12-B</h4>
+<h2 style="margin: 0; color: #1E3A8A; font-size: 20px; text-transform: uppercase;">UP BOARD STUDENT PORTFOLIO</h2>
+<h4 style="margin: 4px 0 0 0; color: #475569; font-weight: normal; font-size: 14px;">माध्यमिक शिक्षा परिषद्, उत्तर प्रदेश | सत्र: 2026 - 2027 | Class: 12-B</h4>
 <div style="display: inline-block; background: #1E3A8A; color: white; padding: 3px 12px; border-radius: 12px; font-size: 11px; margin-top: 6px; font-weight: bold;">OFFICIAL STUDENT DOSSIER</div>
 </div>
 <div style="display: flex; gap: 15px; margin-bottom: 15px;">
@@ -474,11 +513,11 @@ else:
 <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">PEN / Aadhar:</td><td style="padding: 6px;">{user_row[6]} / {user_row[7]}</td></tr>
 <tr><td style="padding: 6px; font-weight: bold;">Contact / Email:</td><td style="padding: 6px;">{user_row[26]} | {user_row[27]}</td></tr>
 </table>
-<div style="width: 30%; border: 2px dashed #94A3B8; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #F8FAFC; padding: 10px; text-align: center;">
-<div style="font-size: 38px;">🎓</div>
+<div style="width: 30%; border: 2px dashed #94A3B8; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #F8FAFC; padding: 8px; text-align: center;">
+{photo_html}
 <div style="font-weight: bold; font-size: 13px; color: #1E3A8A; margin-top: 5px;">{user_row[15]}</div>
-<div style="font-size: 12px; color: #64748B;">Class 12-B</div>
-<div style="font-size: 11px; color: #059669; margin-top: 6px; border: 1px solid #059669; padding: 2px 6px; border-radius: 10px;">Verified Student</div>
+<div style="font-size: 12px; color: #64748B;">Class 12-B (UP Board)</div>
+<div style="font-size: 11px; color: #059669; margin-top: 4px; border: 1px solid #059669; padding: 2px 6px; border-radius: 10px;">Verified Student</div>
 </div>
 </div>
 <div style="margin-top: 10px;">
@@ -492,19 +531,19 @@ else:
 </div>"""
             st.html(p1_html)
 
-            # Render Page 2
+            # Page 2
             st.markdown("### 📄 Page 2: Continuous Assessment & Evaluation Record")
             p2_html = f"""<div style="border: 2px solid #1E3A8A; border-radius: 10px; padding: 20px; background: #FFFFFF; font-family: sans-serif; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
 <div style="text-align: center; border-bottom: 2px solid #E2E8F0; padding-bottom: 10px; margin-bottom: 15px;">
 <h3 style="margin: 0; color: #1E3A8A; font-size: 18px; text-transform: uppercase;">LEARNING ARTIFACTS & EVALUATION RECORD</h3>
-<div style="display: inline-block; background: #059669; color: white; padding: 3px 12px; border-radius: 12px; font-size: 11px; margin-top: 6px; font-weight: bold;">CONTINUOUS & COMPREHENSIVE EVALUATION</div>
+<div style="display: inline-block; background: #059669; color: white; padding: 3px 12px; border-radius: 12px; font-size: 11px; margin-top: 6px; font-weight: bold;">UP BOARD CONTINUOUS EVALUATION</div>
 </div>
 <div style="margin-bottom: 15px;">
 <div style="color: #1E3A8A; font-weight: bold; font-size: 14px; margin-bottom: 8px;">📚 Key Academic & Practical Artifacts:</div>
 {items_html}
 </div>
 <div style="border: 1px solid #CBD5E1; border-radius: 6px; padding: 12px; background: #F8FAFC; margin-top: 15px;">
-<div style="margin: 0 0 8px 0; color: #1E3A8A; font-weight: bold; font-size: 13px;">📝 CBSE Portfolio Rubric Criteria (Max Marks: 20)</div>
+<div style="margin: 0 0 8px 0; color: #1E3A8A; font-weight: bold; font-size: 13px;">📝 UP Board Portfolio Rubric Criteria (Max Marks: 20)</div>
 <div style="display: flex; gap: 8px; font-size: 12px; text-align: center;">
 <div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>1. Regularity</strong><br>(5 M)</div>
 <div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>2. Authenticity</strong><br>(5 M)</div>
@@ -533,10 +572,33 @@ else:
                     <button onclick="window.parent.print()" style="background-color: #1E3A8A; color: white; border: none; padding: 10px 20px; font-size: 14px; border-radius: 6px; cursor: pointer; font-weight: bold; width: 100%;">🖨️ Print / Save as PDF</button>
                 """, height=50)
             with col_p2:
-                st.caption("Tip: Aap browser me **Save as PDF** select karke is 2-page portfolio card ko download kar sakte hain.")
+                st.caption("Tip: Browser me **Save as PDF** select karke is 2-page portfolio card ko download kar sakte hain.")
 
-        # --- TAB 2: Submissions Record ---
+        # --- TAB 2: UPLOAD PHOTO (STUDENT SIDE) ---
         with tab_s2:
+            st.subheader("🖼️ Upload Passport Size Photo")
+            st.caption("Aapki photo portfolio card ke Page 1 par display hogi.")
+            
+            c_ph1, c_ph2 = st.columns([1, 2])
+            with c_ph1:
+                if student_photo:
+                    st.image(base64.b64decode(student_photo), caption="Current Photo", width=140)
+                else:
+                    st.info("No photo uploaded yet.")
+                    
+            with c_ph2:
+                uploaded_img = st.file_uploader("Choose Photo (JPG, JPEG, PNG)", type=["jpg", "jpeg", "png"])
+                if uploaded_img is not None:
+                    img_bytes = uploaded_img.read()
+                    encoded_str = base64.b64encode(img_bytes).decode("utf-8")
+                    if st.button("Save & Upload Photo", type="primary"):
+                        c.execute("UPDATE students SET photo_b64=? WHERE username=?", (encoded_str, student_username))
+                        conn.commit()
+                        st.success("Photo successfully upload ho gayi!")
+                        st.rerun()
+
+        # --- TAB 3: SUBMISSIONS RECORD ---
+        with tab_s3:
             st.subheader("My Portfolio Records")
             try:
                 my_port = pd.read_sql_query(
@@ -565,10 +627,10 @@ else:
                             if row.get('total_marks', 0) > 0:
                                 st.write(f"**Rubric Breakdown:** Regularity: {row['rubric_regularity']}/5 | Authenticity: {row['rubric_authenticity']}/5 | Reflection: {row['rubric_reflection']}/5 | Creativity: {row['rubric_creativity']}/5")
 
-        # --- TAB 3: Submit New Artifact ---
-        with tab_s3:
+        # --- TAB 4: SUBMIT ARTIFACT ---
+        with tab_s4:
             st.subheader("Add Work to Portfolio")
-            with st.form("cbse_submission_form"):
+            with st.form("upboard_submission_form"):
                 section = st.selectbox("1. Select Portfolio Pillar*", [
                     "2. Academic Artifacts (Best CW/HW, Unit Tests, Error Analysis)",
                     "3. Projects & Practical Work (Lab Experiments, Working Models, Surveys)",
@@ -594,7 +656,6 @@ else:
                 if st.form_submit_button("Submit to Portfolio", type="primary"):
                     if title:
                         now_str = datetime.now().strftime("%d-%b-%Y %I:%M %p")
-                        c = conn.cursor()
                         c.execute("""
                             INSERT INTO portfolio (
                                 student_username, portfolio_section, category, title, 
@@ -607,34 +668,24 @@ else:
                     else:
                         st.error("Title is required!")
 
-        # --- TAB 4: Profile & Goal Setting ---
-        with tab_s4:
+        # --- TAB 5: PROFILE GOALS ---
+        with tab_s5:
             st.subheader("🎯 Academic Goals & Self Profile")
-            curr_goals = ""
-            curr_sw = ""
-            try:
-                c = conn.cursor()
-                c.execute("SELECT academic_goals, strengths_weaknesses FROM students WHERE username=?", (student_username,))
-                res = c.fetchone()
-                if res:
-                    curr_goals = res[0] if res[0] else ""
-                    curr_sw = res[1] if res[1] else ""
-            except Exception:
-                pass
+            curr_goals = user_row[28] if len(user_row) > 28 and user_row[28] else ""
+            curr_sw = user_row[29] if len(user_row) > 29 and user_row[29] else ""
             
             with st.form("goals_form"):
                 goals = st.text_area("My Goals for Session 2026-27:", value=curr_goals)
                 sw = st.text_area("My Strengths & Areas to Improve:", value=curr_sw)
                 
                 if st.form_submit_button("Save Goals"):
-                    c = conn.cursor()
                     c.execute("UPDATE students SET academic_goals=?, strengths_weaknesses=? WHERE username=?", (goals, sw, student_username))
                     conn.commit()
                     st.success("Goals updated!")
                     st.rerun()
 
-        # --- TAB 5: Official Details ---
-        with tab_s5:
+        # --- TAB 6: OFFICIAL DETAILS ---
+        with tab_s6:
             st.subheader("Official Details (School Record)")
             c1, c2 = st.columns(2)
             with c1:
