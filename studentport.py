@@ -8,19 +8,18 @@ from datetime import datetime
 # --- Page Config ---
 st.set_page_config(page_title="Class 12-B CBSE Portfolio Portal", page_icon="🎓", layout="wide")
 
-# --- Cleaner Helper Function ---
+# --- String & Decimal Cleaner Helper Function ---
 def clean_val(val):
     if pd.isna(val) or val is None:
         return ""
     val_str = str(val).strip()
     if val_str.lower() in ["nan", "none", "nat", "<na>", "null"]:
         return ""
-    # Clean floating decimals like 37212.0 -> 37212
     if re.match(r'^-?\d+\.0+$', val_str):
         val_str = val_str.split('.')[0]
     return val_str
 
-# --- Database Connection ---
+# --- Database Setup & Auto-Migration ---
 def get_db_connection():
     return sqlite3.connect("class12b_portfolio.db", check_same_thread=False)
 
@@ -28,7 +27,7 @@ def init_db():
     conn = get_db_connection()
     c = conn.cursor()
     
-    # 1. Students Master Table
+    # 1. Students Master Table (Total 29 Columns)
     c.execute('''
         CREATE TABLE IF NOT EXISTS students (
             roll_no TEXT,
@@ -87,7 +86,7 @@ def init_db():
         )
     ''')
     
-    # Safe Auto-Migration for missing columns
+    # Safe Column Migration
     c.execute("PRAGMA table_info(students)")
     student_cols = [row[1] for row in c.fetchall()]
     if "academic_goals" not in student_cols:
@@ -103,7 +102,7 @@ def init_db():
     except Exception:
         pass
 
-    # Ensure Admin Account Exists
+    # Ensure Admin Exists
     c.execute("SELECT * FROM students WHERE username = 'admin'")
     if not c.fetchone():
         c.execute("""
@@ -116,26 +115,23 @@ def init_db():
 
 # --- Deep File Locator for Excel ---
 def find_excel_file():
-    # Check current directory and subdirectories
-    possible_names = ["studentport.xlsx", "studentport.xls", "Studentport.xlsx", "STUDENTPORT.XLSX"]
     for root, dirs, files in os.walk("."):
         for f in files:
             if f.lower() in ["studentport.xlsx", "studentport.xls"]:
                 return os.path.join(root, f)
     return None
 
-# --- Excel Sync & Auto-Recovery Function ---
+# --- Excel Sync Logic with Correct Placeholder Bindings ---
 def sync_excel_data():
     target_file = find_excel_file()
     if not target_file:
-        return 0, "Error: 'studentport.xlsx' file repository me nahi mili. Kripya file name check karein."
+        return 0, "Error: 'studentport.xlsx' file repository me nahi mili."
 
     try:
         df_excel = pd.read_excel(target_file, dtype=str)
         conn = get_db_connection()
         c = conn.cursor()
         
-        # Don't delete teacher admin, only refresh students
         c.execute("DELETE FROM students WHERE role='Student'")
         
         success_count = 0
@@ -154,6 +150,7 @@ def sync_excel_data():
             if "00:00:00" in dob_val:
                 dob_val = dob_val.replace("00:00:00", "").strip()
             
+            # Exact 29 values & 29 placeholders
             c.execute("""
                 INSERT OR REPLACE INTO students (
                     roll_no, username, password, class_name, sr_no, roll_no_10th, 
@@ -163,7 +160,7 @@ def sync_excel_data():
                     gender, caste, category, religion, address, mob_no, email_id, role
                 ) VALUES (?, ?, ?, '12-B', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Student')
             """, (
-                r_no, login_username, login_password, '12-B',
+                r_no, login_username, login_password,
                 sr_no,
                 clean_val(row.get("roll numer 10th", "")),
                 clean_val(row.get("PEN NUMBER", "")),
@@ -197,10 +194,9 @@ def sync_excel_data():
     except Exception as e:
         return 0, f"Excel Reading Error: {str(e)}"
 
-# Initialize DB
 init_db()
 
-# --- Auto Self-Healing on Every Session / Wake-up ---
+# Auto self-healing check
 def ensure_database_populated():
     conn = get_db_connection()
     c = conn.cursor()
@@ -242,10 +238,10 @@ def logout_user():
     st.session_state.user_data = None
     st.rerun()
 
-# --- Login UI ---
+# --- Login UI (ID / Pass Info Removed for Privacy) ---
 if not st.session_state.logged_in:
     st.title("🎓 Class 12-B Continuous & Comprehensive Portfolio Portal")
-    st.caption("CBSE & State Board Internal Assessment Management System")
+    st.caption("Internal Assessment & Student Portfolio Management")
     
     col1, col2 = st.columns([1.2, 1])
     with col1:
@@ -262,16 +258,14 @@ if not st.session_state.logged_in:
                 st.success(f"Welcome {user[15]}!")
                 st.rerun()
             else:
-                st.error("Invalid Name or Password (S.R. No.)!")
+                st.error("Invalid Name or Password (S.R. No.)! Check spelling or contact Teacher.")
                 
     with col2:
         st.info("""
-        **Login Credentials Guide:**
-        - **Teacher (Admin):**
-          - ID: `admin` | Password: `admin123`
-        - **Students:**
-          - **Login ID:** Full Name (e.g. `AJIT KUMAR`)
-          - **Password:** S.R. NO. (e.g. `37212`)
+        **📌 Instructions for Students:**
+        - **Login ID:** Apna School Record wala Name enter karein.
+        - **Password:** Apna **S.R. Number** enter karein.
+        - Kisi bhi login samasya ke liye Class Teacher se sampark karein.
         """)
 
 # --- Authenticated App ---
@@ -308,7 +302,6 @@ else:
             "🔄 Excel File Status & Sync"
         ])
         
-        # TAB 1: Grading
         with tab1:
             st.subheader("Submitted Student Portfolios")
             try:
@@ -377,7 +370,6 @@ else:
                     st.success("Marks & Rubric Saved Successfully!")
                     st.rerun()
 
-        # TAB 2: Master Student Records
         with tab2:
             st.subheader("Class 12-B Master Records")
             try:
@@ -394,14 +386,13 @@ else:
             if not students_df.empty:
                 st.download_button("📥 Export Clean Data (CSV)", students_df.to_csv(index=False).encode('utf-8'), "Class12B_Master.csv", "text/csv")
 
-        # TAB 3: Excel Diagnostics & Force Sync
         with tab3:
             st.subheader("Excel File Status & Force Sync")
             excel_path = find_excel_file()
             if excel_path:
                 st.success(f"✅ Excel file detected successfully at: `{excel_path}`")
             else:
-                st.error("❌ 'studentport.xlsx' file detect nahi ho rahi hai. Make sure repository ke root ya folder me file maujood hai.")
+                st.error("❌ 'studentport.xlsx' file detect nahi ho rahi hai.")
                 
             if st.button("🔄 Force Re-Sync Data from Excel", type="primary"):
                 count, msg = sync_excel_data()
@@ -425,7 +416,6 @@ else:
             "👤 Official Details"
         ])
         
-        # Submissions
         with tab_s1:
             st.subheader("My Portfolio Records")
             try:
@@ -455,7 +445,6 @@ else:
                             if row.get('total_marks', 0) > 0:
                                 st.write(f"**Rubric Breakdown:** Regularity: {row['rubric_regularity']}/5 | Authenticity: {row['rubric_authenticity']}/5 | Reflection: {row['rubric_reflection']}/5 | Creativity: {row['rubric_creativity']}/5")
 
-        # Submit Artifact
         with tab_s2:
             st.subheader("Add Work to Portfolio")
             with st.form("cbse_submission_form"):
@@ -497,7 +486,6 @@ else:
                     else:
                         st.error("Title is required!")
 
-        # Profile Goals
         with tab_s3:
             st.subheader("🎯 Academic Goals & Self Profile")
             curr_goals = ""
@@ -523,7 +511,6 @@ else:
                     st.success("Goals updated!")
                     st.rerun()
 
-        # Official Details
         with tab_s4:
             st.subheader("Official Details (School Record)")
             c1, c2 = st.columns(2)
