@@ -20,6 +20,14 @@ def clean_val(val):
         val_str = val_str.split('.')[0]
     return val_str
 
+def safe_b64_decode(data_str):
+    if not data_str or len(data_str) < 50:
+        return None
+    try:
+        return base64.b64decode(data_str)
+    except Exception:
+        return None
+
 # --- Database Connection & Setup ---
 def get_db_connection():
     return sqlite3.connect("class12b_portfolio.db", check_same_thread=False)
@@ -136,7 +144,6 @@ def sync_excel_data():
         conn = get_db_connection()
         c = conn.cursor()
         
-        # Keep existing photos during sync
         c.execute("SELECT username, photo_b64 FROM students WHERE photo_b64 != ''")
         existing_photos = dict(c.fetchall())
         
@@ -217,7 +224,7 @@ def ensure_database_populated():
 
 ensure_database_populated()
 
-# --- Session State Management (Safe Init) ---
+# --- Session State Management ---
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "username" not in st.session_state:
@@ -279,23 +286,24 @@ if not st.session_state.logged_in or not st.session_state.username:
 # --- Authenticated App ---
 else:
     conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT * FROM students WHERE username=?", (st.session_state.username,))
-    user_row = c.fetchone()
+    user_df = pd.read_sql_query("SELECT * FROM students WHERE username=?", conn, params=(st.session_state.username,))
     
-    if not user_row:
+    if user_df.empty:
+        conn.close()
         logout_user()
 
-    role = user_row[31] if len(user_row) > 31 else user_row[-1]
-    student_roll = user_row[0]
-    student_username = user_row[1]
-    student_sr = user_row[4]
-    student_name = user_row[15]
-    student_photo = user_row[30] if len(user_row) > 30 else ""
+    user_dict = user_df.iloc[0].to_dict()
+    role = user_dict.get("role", "Student")
+    student_roll = user_dict.get("roll_no", "")
+    student_username = user_dict.get("username", "")
+    student_sr = user_dict.get("sr_no", "")
+    student_name = user_dict.get("student_name", "")
+    student_photo = user_dict.get("photo_b64", "")
     
     with st.sidebar:
-        if student_photo:
-            st.image(base64.b64decode(student_photo), width=100)
+        decoded_sidebar_photo = safe_b64_decode(student_photo)
+        if decoded_sidebar_photo:
+            st.image(decoded_sidebar_photo, width=100)
         st.write(f"### 👋 **{student_name}**")
         st.badge(f"Role: {role}")
         if role == "Student":
@@ -305,6 +313,7 @@ else:
         st.write("**Class & Section:** 12-B")
         st.divider()
         if st.button("Logout", use_container_width=True):
+            conn.close()
             logout_user()
 
     # ==========================================
@@ -376,6 +385,7 @@ else:
                 new_feedback = st.text_input("Teacher's Feedback / Remarks", value=sel_row['feedback'])
                 
                 if st.button("Save Assessment", type="primary"):
+                    c = conn.cursor()
                     c.execute("""
                         UPDATE portfolio 
                         SET rubric_regularity=?, rubric_authenticity=?, rubric_reflection=?, 
@@ -401,6 +411,7 @@ else:
                     if t_uploaded_img is not None:
                         t_b64 = base64.b64encode(t_uploaded_img.read()).decode("utf-8")
                         if st.button("Save Photo for Selected Student", type="primary"):
+                            c = conn.cursor()
                             c.execute("UPDATE students SET photo_b64=? WHERE username=?", (t_b64, chosen_student))
                             conn.commit()
                             st.success(f"Photo uploaded for {chosen_student}!")
@@ -458,8 +469,8 @@ else:
             st.subheader("🎴 UP Board Official Student Portfolio Card (2-Page)")
             st.caption("माध्यमिक शिक्षा परिषद्, उत्तर प्रदेश - सत्र: 2026-27")
             
-            p_goals = user_row[28] if len(user_row) > 28 and user_row[28] else "Not specified yet."
-            p_sw = user_row[29] if len(user_row) > 29 and user_row[29] else "Not specified yet."
+            p_goals = user_dict.get("academic_goals") if user_dict.get("academic_goals") else "Not specified yet."
+            p_sw = user_dict.get("strengths_weaknesses") if user_dict.get("strengths_weaknesses") else "Not specified yet."
             
             try:
                 card_items = pd.read_sql_query(
@@ -486,11 +497,11 @@ else:
                     </div>
                     """
 
-            hindi_name_str = f"({user_row[16]})" if user_row[16] else ""
+            hindi_name_str = f"({user_dict.get('student_name_hindi')})" if user_dict.get('student_name_hindi') else ""
             today_date_str = datetime.now().strftime('%d-%m-%Y')
 
             # Display Photo or Avatar
-            if student_photo:
+            if safe_b64_decode(student_photo):
                 photo_html = f'<img src="data:image/jpeg;base64,{student_photo}" style="width: 90px; height: 110px; object-fit: cover; border-radius: 6px; border: 2px solid #1E3A8A;"/>'
             else:
                 photo_html = '<div style="font-size: 40px;">🎓</div><div style="font-size: 10px; color: #94A3B8; margin-top: 4px;">Photo Pending</div>'
@@ -505,18 +516,18 @@ else:
 </div>
 <div style="display: flex; gap: 15px; margin-bottom: 15px;">
 <table style="width: 70%; border-collapse: collapse; font-size: 13px;">
-<tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold; width: 35%;">Student Name:</td><td style="padding: 6px; color: #1E3A8A; font-weight: bold;">{user_row[15]} {hindi_name_str}</td></tr>
-<tr><td style="padding: 6px; font-weight: bold;">Roll No:</td><td style="padding: 6px;">{user_row[0]}</td></tr>
-<tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">S.R. No:</td><td style="padding: 6px;">{user_row[4]}</td></tr>
-<tr><td style="padding: 6px; font-weight: bold;">Father's Name:</td><td style="padding: 6px;">{user_row[17]}</td></tr>
-<tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">Mother's Name:</td><td style="padding: 6px;">{user_row[19]}</td></tr>
-<tr><td style="padding: 6px; font-weight: bold;">Date of Birth:</td><td style="padding: 6px;">{user_row[8]}</td></tr>
-<tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">PEN / Aadhar:</td><td style="padding: 6px;">{user_row[6]} / {user_row[7]}</td></tr>
-<tr><td style="padding: 6px; font-weight: bold;">Contact / Email:</td><td style="padding: 6px;">{user_row[26]} | {user_row[27]}</td></tr>
+<tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold; width: 35%;">Student Name:</td><td style="padding: 6px; color: #1E3A8A; font-weight: bold;">{user_dict.get('student_name', '')} {hindi_name_str}</td></tr>
+<tr><td style="padding: 6px; font-weight: bold;">Roll No:</td><td style="padding: 6px;">{user_dict.get('roll_no', '')}</td></tr>
+<tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">S.R. No:</td><td style="padding: 6px;">{user_dict.get('sr_no', '')}</td></tr>
+<tr><td style="padding: 6px; font-weight: bold;">Father's Name:</td><td style="padding: 6px;">{user_dict.get('father_name', '')}</td></tr>
+<tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">Mother's Name:</td><td style="padding: 6px;">{user_dict.get('mother_name', '')}</td></tr>
+<tr><td style="padding: 6px; font-weight: bold;">Date of Birth:</td><td style="padding: 6px;">{user_dict.get('dob', '')}</td></tr>
+<tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">PEN / Aadhar:</td><td style="padding: 6px;">{user_dict.get('pen_no', '')} / {user_dict.get('aadhar_no', '')}</td></tr>
+<tr><td style="padding: 6px; font-weight: bold;">Contact / Email:</td><td style="padding: 6px;">{user_dict.get('mob_no', '')} | {user_dict.get('email_id', '')}</td></tr>
 </table>
 <div style="width: 30%; border: 2px dashed #94A3B8; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #F8FAFC; padding: 8px; text-align: center;">
 {photo_html}
-<div style="font-weight: bold; font-size: 13px; color: #1E3A8A; margin-top: 5px;">{user_row[15]}</div>
+<div style="font-weight: bold; font-size: 13px; color: #1E3A8A; margin-top: 5px;">{user_dict.get('student_name', '')}</div>
 <div style="font-size: 12px; color: #64748B;">Class 12-B (UP Board)</div>
 <div style="font-size: 11px; color: #059669; margin-top: 4px; border: 1px solid #059669; padding: 2px 6px; border-radius: 10px;">Verified Student</div>
 </div>
@@ -582,8 +593,9 @@ else:
             
             c_ph1, c_ph2 = st.columns([1, 2])
             with c_ph1:
-                if student_photo:
-                    st.image(base64.b64decode(student_photo), caption="Current Photo", width=140)
+                decoded_img = safe_b64_decode(student_photo)
+                if decoded_img:
+                    st.image(decoded_img, caption="Current Photo", width=140)
                 else:
                     st.info("No photo uploaded yet.")
                     
@@ -593,6 +605,7 @@ else:
                     img_bytes = uploaded_img.read()
                     encoded_str = base64.b64encode(img_bytes).decode("utf-8")
                     if st.button("Save & Upload Photo", type="primary"):
+                        c = conn.cursor()
                         c.execute("UPDATE students SET photo_b64=? WHERE username=?", (encoded_str, student_username))
                         conn.commit()
                         st.success("Photo successfully upload ho gayi!")
@@ -657,6 +670,7 @@ else:
                 if st.form_submit_button("Submit to Portfolio", type="primary"):
                     if title:
                         now_str = datetime.now().strftime("%d-%b-%Y %I:%M %p")
+                        c = conn.cursor()
                         c.execute("""
                             INSERT INTO portfolio (
                                 student_username, portfolio_section, category, title, 
@@ -672,14 +686,15 @@ else:
         # --- TAB 5: PROFILE GOALS ---
         with tab_s5:
             st.subheader("🎯 Academic Goals & Self Profile")
-            curr_goals = user_row[28] if len(user_row) > 28 and user_row[28] else ""
-            curr_sw = user_row[29] if len(user_row) > 29 and user_row[29] else ""
+            curr_goals = user_dict.get("academic_goals", "")
+            curr_sw = user_dict.get("strengths_weaknesses", "")
             
             with st.form("goals_form"):
-                goals = st.text_area("My Goals for Session 2026-27:", value=curr_goals)
-                sw = st.text_area("My Strengths & Areas to Improve:", value=curr_sw)
+                goals = st.text_area("My Goals for Session 2026-27:", value=curr_goals if curr_goals else "")
+                sw = st.text_area("My Strengths & Areas to Improve:", value=curr_sw if curr_sw else "")
                 
                 if st.form_submit_button("Save Goals"):
+                    c = conn.cursor()
                     c.execute("UPDATE students SET academic_goals=?, strengths_weaknesses=? WHERE username=?", (goals, sw, student_username))
                     conn.commit()
                     st.success("Goals updated!")
@@ -690,18 +705,18 @@ else:
             st.subheader("Official Details (School Record)")
             c1, c2 = st.columns(2)
             with c1:
-                st.write(f"**Roll No:** {user_row[0]}")
-                st.write(f"**S.R. No:** {user_row[4]}")
-                st.write(f"**Name (English):** {user_row[15]}")
-                st.write(f"**Name (Hindi):** {user_row[16]}")
-                st.write(f"**Father's Name:** {user_row[17]}")
-                st.write(f"**Mother's Name:** {user_row[19]}")
-                st.write(f"**D.O.B:** {user_row[8]}")
+                st.write(f"**Roll No:** {user_dict.get('roll_no', '')}")
+                st.write(f"**S.R. No:** {user_dict.get('sr_no', '')}")
+                st.write(f"**Name (English):** {user_dict.get('student_name', '')}")
+                st.write(f"**Name (Hindi):** {user_dict.get('student_name_hindi', '')}")
+                st.write(f"**Father's Name:** {user_dict.get('father_name', '')}")
+                st.write(f"**Mother's Name:** {user_dict.get('mother_name', '')}")
+                st.write(f"**D.O.B:** {user_dict.get('dob', '')}")
             with c2:
-                st.write(f"**Aadhar No:** {user_row[7]}")
-                st.write(f"**PEN No:** {user_row[6]}")
-                st.write(f"**Mobile:** {user_row[26]}")
-                st.write(f"**Email:** {user_row[27]}")
-                st.write(f"**Address:** {user_row[25]}")
+                st.write(f"**Aadhar No:** {user_dict.get('aadhar_no', '')}")
+                st.write(f"**PEN No:** {user_dict.get('pen_no', '')}")
+                st.write(f"**Mobile:** {user_dict.get('mob_no', '')}")
+                st.write(f"**Email:** {user_dict.get('email_id', '')}")
+                st.write(f"**Address:** {user_dict.get('address', '')}")
 
     conn.close()
