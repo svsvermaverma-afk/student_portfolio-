@@ -8,18 +8,19 @@ from datetime import datetime
 # --- Page Config ---
 st.set_page_config(page_title="Class 12-B CBSE Portfolio Portal", page_icon="🎓", layout="wide")
 
-# --- Cleaner Function ---
+# --- Cleaner Helper Function ---
 def clean_val(val):
     if pd.isna(val) or val is None:
         return ""
     val_str = str(val).strip()
     if val_str.lower() in ["nan", "none", "nat", "<na>", "null"]:
         return ""
+    # Clean floating decimals like 37212.0 -> 37212
     if re.match(r'^-?\d+\.0+$', val_str):
         val_str = val_str.split('.')[0]
     return val_str
 
-# --- Database Connection & Safe Auto-Migration ---
+# --- Database Connection ---
 def get_db_connection():
     return sqlite3.connect("class12b_portfolio.db", check_same_thread=False)
 
@@ -27,7 +28,7 @@ def init_db():
     conn = get_db_connection()
     c = conn.cursor()
     
-    # 1. Base Students Table
+    # 1. Students Master Table
     c.execute('''
         CREATE TABLE IF NOT EXISTS students (
             roll_no TEXT,
@@ -64,7 +65,7 @@ def init_db():
         )
     ''')
     
-    # 2. Base Portfolio Table
+    # 2. Portfolio Table
     c.execute('''
         CREATE TABLE IF NOT EXISTS portfolio (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,34 +87,15 @@ def init_db():
         )
     ''')
     
-    # --- Auto-Migration (Adds missing columns dynamically if DB exists) ---
+    # Safe Auto-Migration for missing columns
     c.execute("PRAGMA table_info(students)")
     student_cols = [row[1] for row in c.fetchall()]
-    
     if "academic_goals" not in student_cols:
         c.execute("ALTER TABLE students ADD COLUMN academic_goals TEXT DEFAULT ''")
     if "strengths_weaknesses" not in student_cols:
         c.execute("ALTER TABLE students ADD COLUMN strengths_weaknesses TEXT DEFAULT ''")
-        
-    c.execute("PRAGMA table_info(portfolio)")
-    portfolio_cols = [row[1] for row in c.fetchall()]
-    
-    if "portfolio_section" not in portfolio_cols:
-        c.execute("ALTER TABLE portfolio ADD COLUMN portfolio_section TEXT DEFAULT 'General'")
-    if "learning_reflection" not in portfolio_cols:
-        c.execute("ALTER TABLE portfolio ADD COLUMN learning_reflection TEXT DEFAULT ''")
-    if "rubric_regularity" not in portfolio_cols:
-        c.execute("ALTER TABLE portfolio ADD COLUMN rubric_regularity INTEGER DEFAULT 0")
-    if "rubric_authenticity" not in portfolio_cols:
-        c.execute("ALTER TABLE portfolio ADD COLUMN rubric_authenticity INTEGER DEFAULT 0")
-    if "rubric_reflection" not in portfolio_cols:
-        c.execute("ALTER TABLE portfolio ADD COLUMN rubric_reflection INTEGER DEFAULT 0")
-    if "rubric_creativity" not in portfolio_cols:
-        c.execute("ALTER TABLE portfolio ADD COLUMN rubric_creativity INTEGER DEFAULT 0")
-    if "total_marks" not in portfolio_cols:
-        c.execute("ALTER TABLE portfolio ADD COLUMN total_marks INTEGER DEFAULT 0")
 
-    # Clean existing .0 decimals in passwords or sr_no
+    # Clean existing decimal traces in db
     try:
         c.execute("UPDATE students SET password = REPLACE(password, '.0', '') WHERE password LIKE '%.0'")
         c.execute("UPDATE students SET sr_no = REPLACE(sr_no, '.0', '') WHERE sr_no LIKE '%.0'")
@@ -121,7 +103,7 @@ def init_db():
     except Exception:
         pass
 
-    # Ensure Admin Account
+    # Ensure Admin Account Exists
     c.execute("SELECT * FROM students WHERE username = 'admin'")
     if not c.fetchone():
         c.execute("""
@@ -132,22 +114,28 @@ def init_db():
     conn.commit()
     conn.close()
 
-# --- Sync studentport.xlsx ---
+# --- Deep File Locator for Excel ---
+def find_excel_file():
+    # Check current directory and subdirectories
+    possible_names = ["studentport.xlsx", "studentport.xls", "Studentport.xlsx", "STUDENTPORT.XLSX"]
+    for root, dirs, files in os.walk("."):
+        for f in files:
+            if f.lower() in ["studentport.xlsx", "studentport.xls"]:
+                return os.path.join(root, f)
+    return None
+
+# --- Excel Sync & Auto-Recovery Function ---
 def sync_excel_data():
-    excel_files = ["studentport.xlsx", "studentport.xls"]
-    target_file = None
-    for f in excel_files:
-        if os.path.exists(f):
-            target_file = f
-            break
-            
+    target_file = find_excel_file()
     if not target_file:
-        return 0, "studentport.xlsx file nahi mili."
+        return 0, "Error: 'studentport.xlsx' file repository me nahi mili. Kripya file name check karein."
 
     try:
         df_excel = pd.read_excel(target_file, dtype=str)
         conn = get_db_connection()
         c = conn.cursor()
+        
+        # Don't delete teacher admin, only refresh students
         c.execute("DELETE FROM students WHERE role='Student'")
         
         success_count = 0
@@ -156,7 +144,7 @@ def sync_excel_data():
             sr_no = clean_val(row.get("S.R. NO.", ""))
             r_no = clean_val(row.get("ROLL NO.", ""))
             
-            if not s_name or s_name.lower() in ["nan", "nat"] or r_no == "0":
+            if not s_name or s_name.lower() in ["nan", "nat", "null"] or r_no == "0":
                 continue
             
             login_username = " ".join(s_name.split())
@@ -207,11 +195,24 @@ def sync_excel_data():
         conn.close()
         return success_count, "Success"
     except Exception as e:
-        return 0, str(e)
+        return 0, f"Excel Reading Error: {str(e)}"
 
+# Initialize DB
 init_db()
 
-# --- Login Authentication ---
+# --- Auto Self-Healing on Every Session / Wake-up ---
+def ensure_database_populated():
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM students WHERE role='Student'")
+    count = c.fetchone()[0]
+    conn.close()
+    if count == 0:
+        sync_excel_data()
+
+ensure_database_populated()
+
+# --- Authentication Logic ---
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_data = None
@@ -253,6 +254,7 @@ if not st.session_state.logged_in:
         pass_input = st.text_input("Password (S.R. No. for Students)", type="password")
         
         if st.button("Login", type="primary", use_container_width=True):
+            ensure_database_populated()
             user = login_user(user_input, pass_input)
             if user:
                 st.session_state.logged_in = True
@@ -272,7 +274,7 @@ if not st.session_state.logged_in:
           - **Password:** S.R. NO. (e.g. `37212`)
         """)
 
-# --- Authenticated Interface ---
+# --- Authenticated App ---
 else:
     user_row = st.session_state.user_data
     role = user_row[30] if len(user_row) > 30 else user_row[-1]
@@ -298,16 +300,17 @@ else:
     # 1. TEACHER DASHBOARD
     # ==========================================
     if role == "Teacher":
-        st.title("👨‍🏫 Teacher Evaluation & Assessment Panel - Class 12-B")
+        st.title("👨‍🏫 Teacher Evaluation Panel - Class 12-B")
         
         tab1, tab2, tab3 = st.tabs([
-            "📑 Portfolio Assessment & Rubric Grading", 
+            "📑 Portfolio Assessment & Grading", 
             "👥 Class Master Records", 
-            "🔄 Re-Sync Excel Data"
+            "🔄 Excel File Status & Sync"
         ])
         
+        # TAB 1: Grading
         with tab1:
-            st.subheader("All Submitted Portfolio Artifacts")
+            st.subheader("Submitted Student Portfolios")
             try:
                 query = """
                     SELECT p.id, s.roll_no, s.student_name, s.sr_no, p.portfolio_section, 
@@ -322,7 +325,7 @@ else:
                 df_port = pd.DataFrame()
             
             if df_port.empty:
-                st.info("No artifacts submitted yet.")
+                st.info("Abhi tak kisi student ne submission nahi kiya hai.")
             else:
                 st.dataframe(
                     df_port[["roll_no", "student_name", "portfolio_section", "category", "title", "total_marks", "grade", "submitted_on"]],
@@ -330,7 +333,7 @@ else:
                 )
                 
                 st.divider()
-                st.subheader("🎯 CBSE Rubric-Based Evaluation")
+                st.subheader("🎯 Evaluate Artifact")
                 selected_pid = st.selectbox("Select Submission to Grade", df_port["id"].tolist())
                 sel_row = df_port[df_port["id"] == selected_pid].iloc[0]
                 
@@ -342,28 +345,27 @@ else:
                     st.markdown(f"**Title:** **{sel_row['title']}**")
                     st.markdown(f"**Description:** {sel_row['description']}")
                 with col_d2:
-                    st.markdown(f"**Student Self-Reflection:**")
+                    st.markdown(f"**Student Reflection:**")
                     st.info(sel_row['learning_reflection'] if sel_row['learning_reflection'] else "No self-reflection entered.")
                     if sel_row['project_link']:
-                        st.markdown(f"🔗 **Attachment / Work Link:** [{sel_row['project_link']}]({sel_row['project_link']})")
+                        st.markdown(f"🔗 **Attachment Link:** [{sel_row['project_link']}]({sel_row['project_link']})")
                 
-                st.markdown("##### 📝 Scoring Rubric (Out of 5 Marks per Criteria)")
+                st.markdown("##### 📝 CBSE Scoring Rubric (0-5 per Criteria)")
                 c_r1, c_r2, c_r3, c_r4 = st.columns(4)
                 with c_r1:
-                    r_reg = st.slider("Regularity & Timeliness (0-5)", 0, 5, 4)
+                    r_reg = st.slider("Regularity (0-5)", 0, 5, 4)
                 with c_r2:
-                    r_auth = st.slider("Authenticity & Quality (0-5)", 0, 5, 4)
+                    r_auth = st.slider("Authenticity (0-5)", 0, 5, 4)
                 with c_r3:
-                    r_refl = st.slider("Reflection & Learning (0-5)", 0, 5, 4)
+                    r_refl = st.slider("Reflection (0-5)", 0, 5, 4)
                 with c_r4:
-                    r_creat = st.slider("Creativity / Effort (0-5)", 0, 5, 4)
+                    r_creat = st.slider("Creativity (0-5)", 0, 5, 4)
                 
                 total_calculated = r_reg + r_auth + r_refl + r_creat
                 final_grade_str = f"{total_calculated}/20"
-                
                 new_feedback = st.text_input("Teacher's Feedback / Remarks", value=sel_row['feedback'])
                 
-                if st.button("Save CBSE Assessment & Marks", type="primary"):
+                if st.button("Save Assessment", type="primary"):
                     c = conn.cursor()
                     c.execute("""
                         UPDATE portfolio 
@@ -372,26 +374,42 @@ else:
                         WHERE id=?
                     """, (r_reg, r_auth, r_refl, r_creat, total_calculated, final_grade_str, new_feedback, selected_pid))
                     conn.commit()
-                    st.success("Assessment with Rubrics successfully saved!")
+                    st.success("Marks & Rubric Saved Successfully!")
                     st.rerun()
 
+        # TAB 2: Master Student Records
         with tab2:
-            st.subheader("Class 12-B Master Student Records")
-            students_df = pd.read_sql_query("""
-                SELECT roll_no, sr_no, student_name, student_name_hindi, father_name, 
-                       dob, aadhar_no, pen_no, mob_no, email_id, address 
-                FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC
-            """, conn)
+            st.subheader("Class 12-B Master Records")
+            try:
+                students_df = pd.read_sql_query("""
+                    SELECT roll_no, sr_no, student_name, student_name_hindi, father_name, 
+                           dob, aadhar_no, pen_no, mob_no, email_id, address 
+                    FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC
+                """, conn)
+            except Exception:
+                students_df = pd.DataFrame()
+
+            st.write(f"Total Active Students in DB: **{len(students_df)}**")
             st.dataframe(students_df, use_container_width=True)
             if not students_df.empty:
                 st.download_button("📥 Export Clean Data (CSV)", students_df.to_csv(index=False).encode('utf-8'), "Class12B_Master.csv", "text/csv")
 
+        # TAB 3: Excel Diagnostics & Force Sync
         with tab3:
-            st.subheader("Sync with studentport.xlsx")
-            if st.button("🔄 Sync Data Now", type="primary"):
+            st.subheader("Excel File Status & Force Sync")
+            excel_path = find_excel_file()
+            if excel_path:
+                st.success(f"✅ Excel file detected successfully at: `{excel_path}`")
+            else:
+                st.error("❌ 'studentport.xlsx' file detect nahi ho rahi hai. Make sure repository ke root ya folder me file maujood hai.")
+                
+            if st.button("🔄 Force Re-Sync Data from Excel", type="primary"):
                 count, msg = sync_excel_data()
-                st.success(f"{count} students updated successfully!")
-                st.rerun()
+                if count > 0:
+                    st.success(f"🎉 {count} students ka data database me successfully refresh ho gaya!")
+                    st.rerun()
+                else:
+                    st.error(msg)
 
     # ==========================================
     # 2. STUDENT DASHBOARD
@@ -401,15 +419,15 @@ else:
         st.caption(f"S.R. No: {student_sr} | Roll No: {student_roll} | Class: 12-B")
         
         tab_s1, tab_s2, tab_s3, tab_s4 = st.tabs([
-            "📂 My Complete Portfolio Record", 
+            "📂 My Portfolio Submissions", 
             "➕ Submit New Artifact / Work", 
-            "🎯 Student Profile & Goal Setting",
+            "🎯 Profile & Goal Setting",
             "👤 Official Details"
         ])
         
-        # --- TAB 1: Complete Portfolio ---
+        # Submissions
         with tab_s1:
-            st.subheader("Submitted Portfolio Artifacts")
+            st.subheader("My Portfolio Records")
             try:
                 my_port = pd.read_sql_query(
                     "SELECT * FROM portfolio WHERE student_username=? ORDER BY id DESC",
@@ -419,30 +437,29 @@ else:
                 my_port = pd.DataFrame()
             
             if my_port.empty:
-                st.info("Aapka portfolio khali hai. Naya kaam submit karne ke liye 'Submit New Artifact' tab par jayein.")
+                st.info("Aapka portfolio abhi khali hai. Naya kaam submit karne ke liye 'Submit New Artifact' tab par jayein.")
             else:
                 for _, row in my_port.iterrows():
                     with st.expander(f"📌 [{row['portfolio_section']}] {row['title']} - Score: {row['grade']}"):
-                        col_e1, col_e2 = st.columns(2)
-                        with col_e1:
+                        c_sub1, c_sub2 = st.columns(2)
+                        with c_sub1:
                             st.write(f"**Category:** {row['category']}")
-                            st.write(f"**Submitted Date:** {row['submitted_on']}")
-                            st.write(f"**Work Description:** {row['description']}")
+                            st.write(f"**Submitted On:** {row['submitted_on']}")
+                            st.write(f"**Description:** {row['description']}")
                             if row['project_link']:
                                 st.write(f"🔗 **Link:** [{row['project_link']}]({row['project_link']})")
-                        with col_e2:
+                        with c_sub2:
                             st.write(f"**My Self-Reflection:** {row['learning_reflection']}")
                             st.divider()
-                            st.write(f"👨‍🏫 **Teacher's Feedback:** {row['feedback']}")
+                            st.write(f"👨‍🏫 **Teacher Feedback:** {row['feedback']}")
                             if row.get('total_marks', 0) > 0:
-                                st.write(f"**Rubric Marks Breakdown:** Regularity: {row['rubric_regularity']}/5 | Authenticity: {row['rubric_authenticity']}/5 | Reflection: {row['rubric_reflection']}/5 | Creativity: {row['rubric_creativity']}/5")
+                                st.write(f"**Rubric Breakdown:** Regularity: {row['rubric_regularity']}/5 | Authenticity: {row['rubric_authenticity']}/5 | Reflection: {row['rubric_reflection']}/5 | Creativity: {row['rubric_creativity']}/5")
 
-        # --- TAB 2: Submit New Work ---
+        # Submit Artifact
         with tab_s2:
-            st.subheader("Add Artifact to Portfolio")
-            with st.form("cbse_portfolio_submission_form"):
-                
-                section = st.selectbox("1. Select Portfolio Section / Pillar*", [
+            st.subheader("Add Work to Portfolio")
+            with st.form("cbse_submission_form"):
+                section = st.selectbox("1. Select Portfolio Pillar*", [
                     "2. Academic Artifacts (Best CW/HW, Unit Tests, Error Analysis)",
                     "3. Projects & Practical Work (Lab Experiments, Working Models, Surveys)",
                     "4. Creative & Co-Curricular (Art Integration, Creative Writing, Certificates)",
@@ -460,9 +477,9 @@ else:
                     
                 sub_category = st.selectbox("2. Artifact Category*", cat_options)
                 title = st.text_input("3. Title of Work / Topic*")
-                description = st.text_area("4. Summary / Description of the Activity")
+                description = st.text_area("4. Summary of the Activity")
                 reflection = st.text_area("5. Student Reflection (Maine isse kya seekha? / What I learned & challenges faced)")
-                link = st.text_input("6. Google Drive / Photo / GitHub Link of the Work")
+                link = st.text_input("6. Google Drive / Photo / GitHub Link")
                 
                 if st.form_submit_button("Submit to Portfolio", type="primary"):
                     if title:
@@ -475,16 +492,14 @@ else:
                             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """, (student_username, section.split('.')[1].strip(), sub_category, title, description, reflection, link, now_str))
                         conn.commit()
-                        st.success("Artifact portfolio me successfully add ho gaya!")
+                        st.success("Artifact successfully submitted!")
                         st.rerun()
                     else:
-                        st.error("Title dena zaroori hai.")
+                        st.error("Title is required!")
 
-        # --- TAB 3: Student Profile & Goals (Safe Fetch) ---
+        # Profile Goals
         with tab_s3:
-            st.subheader("🎯 Student Profile, Interests & Academic Goals")
-            st.caption("Introductory Section - Set your aspirations and strengths for the session.")
-            
+            st.subheader("🎯 Academic Goals & Self Profile")
             curr_goals = ""
             curr_sw = ""
             try:
@@ -498,19 +513,19 @@ else:
                 pass
             
             with st.form("goals_form"):
-                goals = st.text_area("My Academic & Career Goals for Class 12:", value=curr_goals, placeholder="e.g., Score 90%+ in Board Exams, Master Physics Numericals, Prepare for Competitive Exams...")
-                sw = st.text_area("My Strengths & Areas to Improve:", value=curr_sw, placeholder="e.g., Strength: Problem Solving & Diagrams | Improvement: Time Management during Unit Tests")
+                goals = st.text_area("My Goals for Session 2026-27:", value=curr_goals)
+                sw = st.text_area("My Strengths & Areas to Improve:", value=curr_sw)
                 
-                if st.form_submit_button("Save Goals & Profile"):
+                if st.form_submit_button("Save Goals"):
                     c = conn.cursor()
                     c.execute("UPDATE students SET academic_goals=?, strengths_weaknesses=? WHERE username=?", (goals, sw, student_username))
                     conn.commit()
-                    st.success("Profile goals updated successfully!")
+                    st.success("Goals updated!")
                     st.rerun()
 
-        # --- TAB 4: Official Details ---
+        # Official Details
         with tab_s4:
-            st.subheader("1. Introductory Section - Official Student Profile")
+            st.subheader("Official Details (School Record)")
             c1, c2 = st.columns(2)
             with c1:
                 st.write(f"**Roll No:** {user_row[0]}")
