@@ -86,7 +86,7 @@ def init_db():
         )
     ''')
     
-    # Safe Column Migration
+    # Safe Auto-Migration
     c.execute("PRAGMA table_info(students)")
     student_cols = [row[1] for row in c.fetchall()]
     if "academic_goals" not in student_cols:
@@ -121,7 +121,7 @@ def find_excel_file():
                 return os.path.join(root, f)
     return None
 
-# --- Excel Sync Logic with Correct Placeholder Bindings ---
+# --- Excel Sync Logic ---
 def sync_excel_data():
     target_file = find_excel_file()
     if not target_file:
@@ -150,7 +150,6 @@ def sync_excel_data():
             if "00:00:00" in dob_val:
                 dob_val = dob_val.replace("00:00:00", "").strip()
             
-            # Exact 29 values & 29 placeholders
             c.execute("""
                 INSERT OR REPLACE INTO students (
                     roll_no, username, password, class_name, sr_no, roll_no_10th, 
@@ -238,7 +237,7 @@ def logout_user():
     st.session_state.user_data = None
     st.rerun()
 
-# --- Login UI (ID / Pass Info Removed for Privacy) ---
+# --- Login UI ---
 if not st.session_state.logged_in:
     st.title("🎓 Class 12-B Continuous & Comprehensive Portfolio Portal")
     st.caption("Internal Assessment & Student Portfolio Management")
@@ -409,14 +408,147 @@ else:
         st.title(f"🎓 Student Portfolio - {student_name}")
         st.caption(f"S.R. No: {student_sr} | Roll No: {student_roll} | Class: 12-B")
         
-        tab_s1, tab_s2, tab_s3, tab_s4 = st.tabs([
-            "📂 My Portfolio Submissions", 
+        tab_s1, tab_s2, tab_s3, tab_s4, tab_s5 = st.tabs([
+            "🎴 2-Page Portfolio Card (Printable)",
+            "📂 My Submissions Record", 
             "➕ Submit New Artifact / Work", 
             "🎯 Profile & Goal Setting",
             "👤 Official Details"
         ])
         
+        # --- TAB 1: 2-PAGE GREETING / PORTFOLIO CARD ---
         with tab_s1:
+            st.subheader("🎴 Official 2-Page Student Portfolio Card")
+            st.caption("Standard Assessment Portfolio - Session 2026-27")
+            
+            # Fetch goals and submissions
+            c = conn.cursor()
+            c.execute("SELECT academic_goals, strengths_weaknesses FROM students WHERE username=?", (student_username,))
+            res_goals = c.fetchone()
+            p_goals = res_goals[0] if res_goals and res_goals[0] else "Not specified yet."
+            p_sw = res_goals[1] if res_goals and res_goals[1] else "Not specified yet."
+            
+            try:
+                card_items = pd.read_sql_query(
+                    "SELECT * FROM portfolio WHERE student_username=? ORDER BY id DESC",
+                    conn, params=(student_username,)
+                )
+            except Exception:
+                card_items = pd.DataFrame()
+            
+            # Render Styled HTML 2-Page Card
+            items_html = ""
+            if card_items.empty:
+                items_html = "<p style='color:#777; font-style:italic;'>No portfolio artifacts submitted yet.</p>"
+            else:
+                for _, itm in card_items.iterrows():
+                    items_html += f"""
+                    <div style="border-left: 4px solid #1E3A8A; padding: 8px 12px; margin-bottom: 12px; background: #F8FAFC; border-radius: 4px;">
+                        <div style="font-weight: bold; color: #1E3A8A; font-size: 14px;">📌 [{itm['portfolio_section']}] {itm['title']} <span style="float: right; color: #059669;">Score: {itm['grade']}</span></div>
+                        <div style="font-size: 12px; color: #475569; margin-top: 4px;"><strong>Category:</strong> {itm['category']} | <strong>Date:</strong> {itm['submitted_on']}</div>
+                        <div style="font-size: 13px; color: #1E293B; margin-top: 4px;">{itm['description']}</div>
+                        {f'<div style="font-size: 12px; color: #0284C7; margin-top: 4px;"><strong>Reflection:</strong> {itm["learning_reflection"]}</div>' if itm["learning_reflection"] else ''}
+                        {f'<div style="font-size: 12px; color: #D97706; margin-top: 4px;"><strong>Teacher Feedback:</strong> {itm["feedback"]}</div>' if itm["feedback"] != "No feedback yet" else ''}
+                    </div>
+                    """
+
+            card_html = f"""
+            <div id="printArea" style="font-family: 'Segoe UI', Arial, sans-serif; color: #1e293b;">
+                
+                <!-- ================= PAGE 1 ================= -->
+                <div style="border: 3px double #1E3A8A; border-radius: 12px; padding: 24px; background: #FFFFFF; margin-bottom: 30px; box-shadow: 0 4px 15px rgba(0,0,0,0.08);">
+                    <div style="text-align: center; border-bottom: 2px solid #E2E8F0; padding-bottom: 12px; margin-bottom: 18px;">
+                        <h2 style="margin: 0; color: #1E3A8A; text-transform: uppercase; letter-spacing: 1px;">SENIOR SECONDARY STUDENT PORTFOLIO</h2>
+                        <h4 style="margin: 4px 0 0 0; color: #475569; font-weight: normal;">Academic Session: 2026 - 2027 | Class: 12-B</h4>
+                        <div style="display: inline-block; background: #1E3A8A; color: white; padding: 4px 16px; border-radius: 20px; font-size: 12px; margin-top: 8px; font-weight: 600;">PAGE 1 : INTRODUCTORY & STUDENT PROFILE</div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-bottom: 20px;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                            <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold; width: 35%;">Student Name:</td><td style="padding: 6px; color: #1E3A8A; font-weight: bold; font-size: 15px;">{user_row[15]} {f'({user_row[16]})' if user_row[16] else ''}</td></tr>
+                            <tr><td style="padding: 6px; font-weight: bold;">Roll No:</td><td style="padding: 6px;">{user_row[0]}</td></tr>
+                            <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">S.R. No:</td><td style="padding: 6px;">{user_row[4]}</td></tr>
+                            <tr><td style="padding: 6px; font-weight: bold;">Father's Name:</td><td style="padding: 6px;">{user_row[17]}</td></tr>
+                            <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">Mother's Name:</td><td style="padding: 6px;">{user_row[19]}</td></tr>
+                            <tr><td style="padding: 6px; font-weight: bold;">Date of Birth:</td><td style="padding: 6px;">{user_row[8]}</td></tr>
+                            <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">PEN / Aadhar No:</td><td style="padding: 6px;">{user_row[6]} / {user_row[7]}</td></tr>
+                            <tr><td style="padding: 6px; font-weight: bold;">Contact & Email:</td><td style="padding: 6px;">{user_row[26]} | {user_row[27]}</td></tr>
+                        </table>
+
+                        <div style="border: 2px dashed #94A3B8; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #F8FAFC; padding: 10px; text-align: center;">
+                            <div style="font-size: 40px; margin-bottom: 6px;">🎓</div>
+                            <div style="font-weight: bold; font-size: 14px; color: #1E3A8A;">{user_row[15]}</div>
+                            <div style="font-size: 12px; color: #64748B;">Class 12-B</div>
+                            <div style="font-size: 11px; color: #059669; margin-top: 8px; border: 1px solid #059669; padding: 2px 8px; border-radius: 12px;">Verified Student</div>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 15px;">
+                        <h4 style="color: #1E3A8A; margin-bottom: 8px; border-bottom: 1px solid #CBD5E1; padding-bottom: 4px;">🎯 Academic Vision & Target Goals</h4>
+                        <div style="background: #F8FAFC; border-left: 4px solid #3B82F6; padding: 10px 14px; border-radius: 4px; font-size: 13px; line-height: 1.5; color: #334155;">
+                            {p_goals}
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 15px;">
+                        <h4 style="color: #1E3A8A; margin-bottom: 8px; border-bottom: 1px solid #CBD5E1; padding-bottom: 4px;">💡 Strengths & Areas of Growth</h4>
+                        <div style="background: #F8FAFC; border-left: 4px solid #10B981; padding: 10px 14px; border-radius: 4px; font-size: 13px; line-height: 1.5; color: #334155;">
+                            {p_sw}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ================= PAGE 2 ================= -->
+                <div style="border: 3px double #1E3A8A; border-radius: 12px; padding: 24px; background: #FFFFFF; box-shadow: 0 4px 15px rgba(0,0,0,0.08);">
+                    <div style="text-align: center; border-bottom: 2px solid #E2E8F0; padding-bottom: 12px; margin-bottom: 18px;">
+                        <h3 style="margin: 0; color: #1E3A8A; text-transform: uppercase;">LEARNING ARTIFACTS & EVALUATION RECORD</h3>
+                        <div style="display: inline-block; background: #059669; color: white; padding: 4px 16px; border-radius: 20px; font-size: 12px; margin-top: 6px; font-weight: 600;">PAGE 2 : CONTINUOUS ASSESSMENT & RUBRICS</div>
+                    </div>
+
+                    <div style="margin-bottom: 20px;">
+                        <h4 style="color: #1E3A8A; margin-bottom: 10px; border-bottom: 1px solid #CBD5E1; padding-bottom: 4px;">📚 Key Academic & Practical Artifacts</h4>
+                        {items_html}
+                    </div>
+
+                    <div style="border: 2px solid #E2E8F0; border-radius: 8px; padding: 16px; background: #F8FAFC; margin-top: 25px;">
+                        <h4 style="margin: 0 0 10px 0; color: #1E3A8A;">📝 CBSE Portfolio Rubric Criteria (Max Marks: 20)</h4>
+                        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; font-size: 12px; text-align: center;">
+                            <div style="background: white; padding: 8px; border: 1px solid #CBD5E1; border-radius: 6px;"><strong>1. Regularity</strong><br>(5 Marks)</div>
+                            <div style="background: white; padding: 8px; border: 1px solid #CBD5E1; border-radius: 6px;"><strong>2. Authenticity</strong><br>(5 Marks)</div>
+                            <div style="background: white; padding: 8px; border: 1px solid #CBD5E1; border-radius: 6px;"><strong>3. Reflection</strong><br>(5 Marks)</div>
+                            <div style="background: white; padding: 8px; border: 1px solid #CBD5E1; border-radius: 6px;"><strong>4. Creativity</strong><br>(5 Marks)</div>
+                        </div>
+
+                        <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 30px; padding-top: 15px; border-top: 1px dashed #94A3B8; font-size: 13px;">
+                            <div>
+                                <div><strong>Student Signature:</strong> _____________________</div>
+                                <div style="color: #64748B; font-size: 11px; margin-top: 4px;">Date: {datetime.now().strftime('%d-%m-%Y')}</div>
+                            </div>
+                            <div style="text-align: right;">
+                                <div><strong>Teacher / Evaluator Signature:</strong> _____________________</div>
+                                <div style="color: #64748B; font-size: 11px; margin-top: 4px;">Class Teacher (12-B)</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+            """
+            
+            st.markdown(card_html, unsafe_allow_html=True)
+            
+            # Print Button JavaScript
+            st.divider()
+            col_p1, col_p2 = st.columns([1, 3])
+            with col_p1:
+                st.components.v1.html("""
+                    <button onclick="window.parent.print()" style="background-color: #1E3A8A; color: white; border: none; padding: 10px 20px; font-size: 15px; border-radius: 6px; cursor: pointer; font-weight: bold; width: 100%;">🖨️ Print / Save as PDF</button>
+                """, height=55)
+            with col_p2:
+                st.caption("Tip: Aap browser me **Save as PDF** select karke is 2-page portfolio card ko save ya print kar sakte hain.")
+
+        # --- TAB 2: Submissions ---
+        with tab_s2:
             st.subheader("My Portfolio Records")
             try:
                 my_port = pd.read_sql_query(
@@ -445,7 +577,8 @@ else:
                             if row.get('total_marks', 0) > 0:
                                 st.write(f"**Rubric Breakdown:** Regularity: {row['rubric_regularity']}/5 | Authenticity: {row['rubric_authenticity']}/5 | Reflection: {row['rubric_reflection']}/5 | Creativity: {row['rubric_creativity']}/5")
 
-        with tab_s2:
+        # --- TAB 3: Submit Artifact ---
+        with tab_s3:
             st.subheader("Add Work to Portfolio")
             with st.form("cbse_submission_form"):
                 section = st.selectbox("1. Select Portfolio Pillar*", [
@@ -486,7 +619,8 @@ else:
                     else:
                         st.error("Title is required!")
 
-        with tab_s3:
+        # --- TAB 4: Profile Goals ---
+        with tab_s4:
             st.subheader("🎯 Academic Goals & Self Profile")
             curr_goals = ""
             curr_sw = ""
@@ -511,7 +645,8 @@ else:
                     st.success("Goals updated!")
                     st.rerun()
 
-        with tab_s4:
+        # --- TAB 5: Official Details ---
+        with tab_s5:
             st.subheader("Official Details (School Record)")
             c1, c2 = st.columns(2)
             with c1:
