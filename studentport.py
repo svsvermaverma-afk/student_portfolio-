@@ -96,7 +96,7 @@ def init_db():
         )
     ''')
     
-    # Safe Auto-Migration
+    # Safe Migration
     c.execute("PRAGMA table_info(students)")
     student_cols = [row[1] for row in c.fetchall()]
     if "photo_b64" not in student_cols:
@@ -224,6 +224,124 @@ def ensure_database_populated():
 
 ensure_database_populated()
 
+# --- Helper: Generate Full 2-Page HTML Document ---
+def generate_portfolio_html(student_dict, portfolio_items_df):
+    s_photo = student_dict.get("photo_b64", "")
+    if safe_b64_decode(s_photo):
+        photo_html = f'<img src="data:image/jpeg;base64,{s_photo}" style="width: 90px; height: 110px; object-fit: cover; border-radius: 6px; border: 2px solid #1E3A8A;"/>'
+    else:
+        photo_html = '<div style="font-size: 38px;">🎓</div><div style="font-size: 10px; color: #94A3B8; margin-top: 4px;">Photo Pending</div>'
+
+    items_html = ""
+    if portfolio_items_df.empty:
+        items_html = "<p style='color:#64748B; font-style:italic;'>No portfolio artifacts submitted yet.</p>"
+    else:
+        for _, itm in portfolio_items_df.iterrows():
+            refl_block = f"<div style='font-size: 12px; color: #0284C7; margin-top: 4px;'><strong>Reflection:</strong> {itm['learning_reflection']}</div>" if itm['learning_reflection'] else ""
+            fb_block = f"<div style='font-size: 12px; color: #D97706; margin-top: 4px;'><strong>Teacher Feedback:</strong> {itm['feedback']}</div>" if itm['feedback'] != "No feedback yet" else ""
+            items_html += f"""
+            <div style="border-left: 4px solid #1E3A8A; padding: 10px 14px; margin-bottom: 12px; background: #F8FAFC; border-radius: 4px; border-top: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0; border-bottom: 1px solid #E2E8F0;">
+                <div style="font-weight: bold; color: #1E3A8A; font-size: 14px;">📌 [{itm['portfolio_section']}] {itm['title']} <span style="float: right; color: #059669;">Score: {itm['grade']}</span></div>
+                <div style="font-size: 12px; color: #475569; margin-top: 4px;"><strong>Category:</strong> {itm['category']} | <strong>Date:</strong> {itm['submitted_on']}</div>
+                <div style="font-size: 13px; color: #1E293B; margin-top: 4px;">{itm['description']}</div>
+                {refl_block}
+                {fb_block}
+            </div>
+            """
+
+    hindi_name = f"({student_dict.get('student_name_hindi')})" if student_dict.get('student_name_hindi') else ""
+    today_str = datetime.now().strftime('%d-%m-%Y')
+    p_goals = student_dict.get("academic_goals") if student_dict.get("academic_goals") else "Not specified yet."
+    p_sw = student_dict.get("strengths_weaknesses") if student_dict.get("strengths_weaknesses") else "Not specified yet."
+
+    full_html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Portfolio - {student_dict.get('student_name')}</title>
+    <style>
+        body {{ font-family: 'Segoe UI', Arial, sans-serif; background: #f1f5f9; padding: 20px; }}
+        .page-container {{ max-width: 850px; margin: 0 auto; }}
+        .card-page {{ border: 2px solid #1E3A8A; border-radius: 10px; padding: 25px; background: #FFFFFF; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 30px; page-break-after: always; }}
+        @media print {{
+            body {{ background: none; padding: 0; }}
+            .card-page {{ box-shadow: none; margin-bottom: 0; page-break-after: always; }}
+        }}
+    </style>
+</head>
+<body>
+<div class="page-container">
+    <!-- PAGE 1 -->
+    <div class="card-page">
+        <div style="text-align: center; border-bottom: 2px solid #E2E8F0; padding-bottom: 10px; margin-bottom: 15px;">
+            <h2 style="margin: 0; color: #1E3A8A; font-size: 20px; text-transform: uppercase;">UP BOARD STUDENT PORTFOLIO</h2>
+            <h4 style="margin: 4px 0 0 0; color: #475569; font-weight: normal; font-size: 14px;">माध्यमिक शिक्षा परिषद्, उत्तर प्रदेश | सत्र: 2026 - 2027 | Class: 12-B</h4>
+            <div style="display: inline-block; background: #1E3A8A; color: white; padding: 3px 12px; border-radius: 12px; font-size: 11px; margin-top: 6px; font-weight: bold;">OFFICIAL STUDENT DOSSIER</div>
+        </div>
+        <div style="display: flex; gap: 15px; margin-bottom: 15px;">
+            <table style="width: 70%; border-collapse: collapse; font-size: 13px;">
+                <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold; width: 35%;">Student Name:</td><td style="padding: 6px; color: #1E3A8A; font-weight: bold;">{student_dict.get('student_name', '')} {hindi_name}</td></tr>
+                <tr><td style="padding: 6px; font-weight: bold;">Roll No:</td><td style="padding: 6px;">{student_dict.get('roll_no', '')}</td></tr>
+                <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">S.R. No:</td><td style="padding: 6px;">{student_dict.get('sr_no', '')}</td></tr>
+                <tr><td style="padding: 6px; font-weight: bold;">Father's Name:</td><td style="padding: 6px;">{student_dict.get('father_name', '')}</td></tr>
+                <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">Mother's Name:</td><td style="padding: 6px;">{student_dict.get('mother_name', '')}</td></tr>
+                <tr><td style="padding: 6px; font-weight: bold;">Date of Birth:</td><td style="padding: 6px;">{student_dict.get('dob', '')}</td></tr>
+                <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">PEN / Aadhar:</td><td style="padding: 6px;">{student_dict.get('pen_no', '')} / {student_dict.get('aadhar_no', '')}</td></tr>
+                <tr><td style="padding: 6px; font-weight: bold;">Contact / Email:</td><td style="padding: 6px;">{student_dict.get('mob_no', '')} | {student_dict.get('email_id', '')}</td></tr>
+            </table>
+            <div style="width: 30%; border: 2px dashed #94A3B8; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #F8FAFC; padding: 8px; text-align: center;">
+                {photo_html}
+                <div style="font-weight: bold; font-size: 13px; color: #1E3A8A; margin-top: 5px;">{student_dict.get('student_name', '')}</div>
+                <div style="font-size: 12px; color: #64748B;">Class 12-B (UP Board)</div>
+                <div style="font-size: 11px; color: #059669; margin-top: 4px; border: 1px solid #059669; padding: 2px 6px; border-radius: 10px;">Verified Student</div>
+            </div>
+        </div>
+        <div style="margin-top: 10px;">
+            <div style="color: #1E3A8A; font-weight: bold; font-size: 14px; margin-bottom: 6px;">🎯 Academic Vision & Target Goals:</div>
+            <div style="background: #F8FAFC; border-left: 4px solid #3B82F6; padding: 8px 12px; border-radius: 4px; font-size: 13px; color: #334155;">{p_goals}</div>
+        </div>
+        <div style="margin-top: 10px;">
+            <div style="color: #1E3A8A; font-weight: bold; font-size: 14px; margin-bottom: 6px;">💡 Strengths & Growth Areas:</div>
+            <div style="background: #F8FAFC; border-left: 4px solid #10B981; padding: 8px 12px; border-radius: 4px; font-size: 13px; color: #334155;">{p_sw}</div>
+        </div>
+    </div>
+
+    <!-- PAGE 2 -->
+    <div class="card-page">
+        <div style="text-align: center; border-bottom: 2px solid #E2E8F0; padding-bottom: 10px; margin-bottom: 15px;">
+            <h3 style="margin: 0; color: #1E3A8A; font-size: 18px; text-transform: uppercase;">LEARNING ARTIFACTS & EVALUATION RECORD</h3>
+            <div style="display: inline-block; background: #059669; color: white; padding: 3px 12px; border-radius: 12px; font-size: 11px; margin-top: 6px; font-weight: bold;">UP BOARD CONTINUOUS EVALUATION</div>
+        </div>
+        <div style="margin-bottom: 15px;">
+            <div style="color: #1E3A8A; font-weight: bold; font-size: 14px; margin-bottom: 8px;">📚 Key Academic & Practical Artifacts:</div>
+            {items_html}
+        </div>
+        <div style="border: 1px solid #CBD5E1; border-radius: 6px; padding: 12px; background: #F8FAFC; margin-top: 15px;">
+            <div style="margin: 0 0 8px 0; color: #1E3A8A; font-weight: bold; font-size: 13px;">📝 UP Board Portfolio Rubric Criteria (Max Marks: 20)</div>
+            <div style="display: flex; gap: 8px; font-size: 12px; text-align: center;">
+                <div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>1. Regularity</strong><br>(5 M)</div>
+                <div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>2. Authenticity</strong><br>(5 M)</div>
+                <div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>3. Reflection</strong><br>(5 M)</div>
+                <div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>4. Creativity</strong><br>(5 M)</div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 25px; padding-top: 10px; border-top: 1px dashed #94A3B8; font-size: 12px;">
+                <div>
+                    <div><strong>Student Signature:</strong> _____________________</div>
+                    <div style="color: #64748B; font-size: 11px; margin-top: 4px;">Date: {today_str}</div>
+                </div>
+                <div style="text-align: right;">
+                    <div><strong>Teacher Signature:</strong> _____________________</div>
+                    <div style="color: #64748B; font-size: 11px; margin-top: 4px;">Class Teacher (12-B)</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>
+"""
+    return full_html
+
 # --- Session State Management ---
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -317,17 +435,20 @@ else:
             logout_user()
 
     # ==========================================
-    # 1. TEACHER DASHBOARD
+    # 1. TEACHER / ADMIN DASHBOARD
     # ==========================================
     if role == "Teacher":
         st.title("👨‍🏫 Teacher Evaluation Panel - Class 12-B (UP Board)")
         
-        tab1, tab2, tab3 = st.tabs([
-            "📑 Portfolio Assessment & Grading", 
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "📑 Assessment & Grading", 
+            "🎴 View & Download Student Portfolios",
             "👥 Class Master Records & Photo Upload", 
+            "🗑️ Manage & Delete Records",
             "🔄 Excel File Status & Sync"
         ])
         
+        # TAB 1: Evaluation
         with tab1:
             st.subheader("Submitted Student Portfolios")
             try:
@@ -396,9 +517,43 @@ else:
                     st.success("Marks & Rubric Saved Successfully!")
                     st.rerun()
 
+        # TAB 2: Admin View & Download Student Portfolios
         with tab2:
-            st.subheader("Class 12-B Master Records & Photo Management")
+            st.subheader("🎴 View & Download Individual Student Portfolio Cards")
+            all_stus = pd.read_sql_query("SELECT username, student_name, roll_no FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC", conn)
             
+            if all_stus.empty:
+                st.warning("Koi students available nahi hain.")
+            else:
+                target_stu_user = st.selectbox(
+                    "Choose Student to View Card", 
+                    all_stus["username"].tolist(),
+                    format_func=lambda x: f"Roll {all_stus[all_stus['username']==x]['roll_no'].values[0]} - {all_stus[all_stus['username']==x]['student_name'].values[0]}"
+                )
+                
+                target_stu_data = pd.read_sql_query("SELECT * FROM students WHERE username=?", conn, params=(target_stu_user,)).iloc[0].to_dict()
+                target_stu_items = pd.read_sql_query("SELECT * FROM portfolio WHERE student_username=? ORDER BY id DESC", conn, params=(target_stu_user,))
+                
+                generated_html = generate_portfolio_html(target_stu_data, target_stu_items)
+                
+                col_btn1, col_btn2 = st.columns([1, 2])
+                with col_btn1:
+                    st.download_button(
+                        label=f"📥 Download {target_stu_data.get('student_name')}'s Portfolio Card (.html)",
+                        data=generated_html,
+                        file_name=f"Portfolio_{target_stu_data.get('roll_no')}_{target_stu_data.get('student_name')}.html",
+                        mime="text/html",
+                        type="primary"
+                    )
+                with col_btn2:
+                    st.caption("Aap is file ko download karke offline kisi bhi browser mein open karke print/PDF bana sakte hain.")
+
+                st.divider()
+                st.components.v1.html(generated_html, height=1100, scrolling=True)
+
+        # TAB 3: Master Records & Photo Upload
+        with tab3:
+            st.subheader("Class 12-B Master Records & Photo Management")
             with st.expander("📸 Upload / Update Student Photo (Teacher Panel)"):
                 students_list = pd.read_sql_query("SELECT username, student_name, roll_no FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC", conn)
                 if not students_list.empty:
@@ -432,7 +587,53 @@ else:
             if not students_df.empty:
                 st.download_button("📥 Export Clean Data (CSV)", students_df.to_csv(index=False).encode('utf-8'), "Class12B_Master.csv", "text/csv")
 
-        with tab3:
+        # TAB 4: Delete Data Management (Admin)
+        with tab4:
+            st.subheader("🗑️ Delete & Manage Records (Admin Controls)")
+            st.warning("⚠️ Dhyan dein: Yahan se data delete karne par permanently remove ho jayega.")
+            
+            c_del1, c_del2 = st.columns(2)
+            with c_del1:
+                st.markdown("#### 1. Delete Specific Submission Entry")
+                del_query = "SELECT id, student_username, title, portfolio_section FROM portfolio ORDER BY id DESC"
+                del_items = pd.read_sql_query(del_query, conn)
+                if not del_items.empty:
+                    sel_sub_del = st.selectbox(
+                        "Select Submission to Delete", 
+                        del_items["id"].tolist(),
+                        format_func=lambda x: f"ID {x}: {del_items[del_items['id']==x]['student_username'].values[0]} - {del_items[del_items['id']==x]['title'].values[0]}"
+                    )
+                    if st.button("Delete Selected Submission", type="secondary"):
+                        c = conn.cursor()
+                        c.execute("DELETE FROM portfolio WHERE id=?", (sel_sub_del,))
+                        conn.commit()
+                        st.success("Submission successfully delete ho gaya!")
+                        st.rerun()
+                else:
+                    st.info("No submissions to delete.")
+
+            with c_del2:
+                st.markdown("#### 2. Delete Student Record")
+                all_stu_del = pd.read_sql_query("SELECT username, student_name, roll_no FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC", conn)
+                if not all_stu_del.empty:
+                    sel_user_del = st.selectbox(
+                        "Select Student to Remove", 
+                        all_stu_del["username"].tolist(),
+                        format_func=lambda x: f"Roll {all_stu_del[all_stu_del['username']==x]['roll_no'].values[0]} - {all_stu_del[all_stu_del['username']==x]['student_name'].values[0]}",
+                        key="del_stu_box"
+                    )
+                    if st.button("Delete Student & All Submissions", type="secondary"):
+                        c = conn.cursor()
+                        c.execute("DELETE FROM students WHERE username=?", (sel_user_del,))
+                        c.execute("DELETE FROM portfolio WHERE student_username=?", (sel_user_del,))
+                        conn.commit()
+                        st.success(f"{sel_user_del} aur unke sabhi submissions permanently delete ho gaye!")
+                        st.rerun()
+                else:
+                    st.info("No students to delete.")
+
+        # TAB 5: Excel Status & Sync
+        with tab5:
             st.subheader("Excel File Status & Force Sync")
             excel_path = find_excel_file()
             if excel_path:
@@ -469,9 +670,6 @@ else:
             st.subheader("🎴 UP Board Official Student Portfolio Card (2-Page)")
             st.caption("माध्यमिक शिक्षा परिषद्, उत्तर प्रदेश - सत्र: 2026-27")
             
-            p_goals = user_dict.get("academic_goals") if user_dict.get("academic_goals") else "Not specified yet."
-            p_sw = user_dict.get("strengths_weaknesses") if user_dict.get("strengths_weaknesses") else "Not specified yet."
-            
             try:
                 card_items = pd.read_sql_query(
                     "SELECT * FROM portfolio WHERE student_username=? ORDER BY id DESC",
@@ -480,111 +678,22 @@ else:
             except Exception:
                 card_items = pd.DataFrame()
             
-            items_html = ""
-            if card_items.empty:
-                items_html = "<p style='color:#64748B; font-style:italic;'>No portfolio artifacts submitted yet.</p>"
-            else:
-                for _, itm in card_items.iterrows():
-                    refl_block = f"<div style='font-size: 12px; color: #0284C7; margin-top: 4px;'><strong>Reflection:</strong> {itm['learning_reflection']}</div>" if itm['learning_reflection'] else ""
-                    fb_block = f"<div style='font-size: 12px; color: #D97706; margin-top: 4px;'><strong>Teacher Feedback:</strong> {itm['feedback']}</div>" if itm['feedback'] != "No feedback yet" else ""
-                    items_html += f"""
-                    <div style="border-left: 4px solid #1E3A8A; padding: 10px 14px; margin-bottom: 12px; background: #F8FAFC; border-radius: 4px; border-top: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0; border-bottom: 1px solid #E2E8F0;">
-                        <div style="font-weight: bold; color: #1E3A8A; font-size: 14px;">📌 [{itm['portfolio_section']}] {itm['title']} <span style="float: right; color: #059669;">Score: {itm['grade']}</span></div>
-                        <div style="font-size: 12px; color: #475569; margin-top: 4px;"><strong>Category:</strong> {itm['category']} | <strong>Date:</strong> {itm['submitted_on']}</div>
-                        <div style="font-size: 13px; color: #1E293B; margin-top: 4px;">{itm['description']}</div>
-                        {refl_block}
-                        {fb_block}
-                    </div>
-                    """
+            student_full_html = generate_portfolio_html(user_dict, card_items)
+            
+            col_d1, col_d2 = st.columns([1, 2])
+            with col_d1:
+                st.download_button(
+                    label="📥 Download My Portfolio Card (.html)",
+                    data=student_full_html,
+                    file_name=f"Portfolio_{student_roll}_{student_name}.html",
+                    mime="text/html",
+                    type="primary"
+                )
+            with col_d2:
+                st.caption("Aap is file ko direct download karke kisi bhi phone ya computer me offline dekh aur print kar sakte hain.")
 
-            hindi_name_str = f"({user_dict.get('student_name_hindi')})" if user_dict.get('student_name_hindi') else ""
-            today_date_str = datetime.now().strftime('%d-%m-%Y')
-
-            # Display Photo or Avatar
-            if safe_b64_decode(student_photo):
-                photo_html = f'<img src="data:image/jpeg;base64,{student_photo}" style="width: 90px; height: 110px; object-fit: cover; border-radius: 6px; border: 2px solid #1E3A8A;"/>'
-            else:
-                photo_html = '<div style="font-size: 40px;">🎓</div><div style="font-size: 10px; color: #94A3B8; margin-top: 4px;">Photo Pending</div>'
-
-            # Page 1
-            st.markdown("### 📄 Page 1: Introductory & Student Profile")
-            p1_html = f"""<div style="border: 2px solid #1E3A8A; border-radius: 10px; padding: 20px; background: #FFFFFF; font-family: sans-serif; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
-<div style="text-align: center; border-bottom: 2px solid #E2E8F0; padding-bottom: 10px; margin-bottom: 15px;">
-<h2 style="margin: 0; color: #1E3A8A; font-size: 20px; text-transform: uppercase;">UP BOARD STUDENT PORTFOLIO</h2>
-<h4 style="margin: 4px 0 0 0; color: #475569; font-weight: normal; font-size: 14px;">माध्यमिक शिक्षा परिषद्, उत्तर प्रदेश | सत्र: 2026 - 2027 | Class: 12-B</h4>
-<div style="display: inline-block; background: #1E3A8A; color: white; padding: 3px 12px; border-radius: 12px; font-size: 11px; margin-top: 6px; font-weight: bold;">OFFICIAL STUDENT DOSSIER</div>
-</div>
-<div style="display: flex; gap: 15px; margin-bottom: 15px;">
-<table style="width: 70%; border-collapse: collapse; font-size: 13px;">
-<tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold; width: 35%;">Student Name:</td><td style="padding: 6px; color: #1E3A8A; font-weight: bold;">{user_dict.get('student_name', '')} {hindi_name_str}</td></tr>
-<tr><td style="padding: 6px; font-weight: bold;">Roll No:</td><td style="padding: 6px;">{user_dict.get('roll_no', '')}</td></tr>
-<tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">S.R. No:</td><td style="padding: 6px;">{user_dict.get('sr_no', '')}</td></tr>
-<tr><td style="padding: 6px; font-weight: bold;">Father's Name:</td><td style="padding: 6px;">{user_dict.get('father_name', '')}</td></tr>
-<tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">Mother's Name:</td><td style="padding: 6px;">{user_dict.get('mother_name', '')}</td></tr>
-<tr><td style="padding: 6px; font-weight: bold;">Date of Birth:</td><td style="padding: 6px;">{user_dict.get('dob', '')}</td></tr>
-<tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">PEN / Aadhar:</td><td style="padding: 6px;">{user_dict.get('pen_no', '')} / {user_dict.get('aadhar_no', '')}</td></tr>
-<tr><td style="padding: 6px; font-weight: bold;">Contact / Email:</td><td style="padding: 6px;">{user_dict.get('mob_no', '')} | {user_dict.get('email_id', '')}</td></tr>
-</table>
-<div style="width: 30%; border: 2px dashed #94A3B8; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #F8FAFC; padding: 8px; text-align: center;">
-{photo_html}
-<div style="font-weight: bold; font-size: 13px; color: #1E3A8A; margin-top: 5px;">{user_dict.get('student_name', '')}</div>
-<div style="font-size: 12px; color: #64748B;">Class 12-B (UP Board)</div>
-<div style="font-size: 11px; color: #059669; margin-top: 4px; border: 1px solid #059669; padding: 2px 6px; border-radius: 10px;">Verified Student</div>
-</div>
-</div>
-<div style="margin-top: 10px;">
-<div style="color: #1E3A8A; font-weight: bold; font-size: 14px; margin-bottom: 6px;">🎯 Academic Vision & Target Goals:</div>
-<div style="background: #F8FAFC; border-left: 4px solid #3B82F6; padding: 8px 12px; border-radius: 4px; font-size: 13px; color: #334155;">{p_goals}</div>
-</div>
-<div style="margin-top: 10px;">
-<div style="color: #1E3A8A; font-weight: bold; font-size: 14px; margin-bottom: 6px;">💡 Strengths & Growth Areas:</div>
-<div style="background: #F8FAFC; border-left: 4px solid #10B981; padding: 8px 12px; border-radius: 4px; font-size: 13px; color: #334155;">{p_sw}</div>
-</div>
-</div>"""
-            st.html(p1_html)
-
-            # Page 2
-            st.markdown("### 📄 Page 2: Continuous Assessment & Evaluation Record")
-            p2_html = f"""<div style="border: 2px solid #1E3A8A; border-radius: 10px; padding: 20px; background: #FFFFFF; font-family: sans-serif; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
-<div style="text-align: center; border-bottom: 2px solid #E2E8F0; padding-bottom: 10px; margin-bottom: 15px;">
-<h3 style="margin: 0; color: #1E3A8A; font-size: 18px; text-transform: uppercase;">LEARNING ARTIFACTS & EVALUATION RECORD</h3>
-<div style="display: inline-block; background: #059669; color: white; padding: 3px 12px; border-radius: 12px; font-size: 11px; margin-top: 6px; font-weight: bold;">UP BOARD CONTINUOUS EVALUATION</div>
-</div>
-<div style="margin-bottom: 15px;">
-<div style="color: #1E3A8A; font-weight: bold; font-size: 14px; margin-bottom: 8px;">📚 Key Academic & Practical Artifacts:</div>
-{items_html}
-</div>
-<div style="border: 1px solid #CBD5E1; border-radius: 6px; padding: 12px; background: #F8FAFC; margin-top: 15px;">
-<div style="margin: 0 0 8px 0; color: #1E3A8A; font-weight: bold; font-size: 13px;">📝 UP Board Portfolio Rubric Criteria (Max Marks: 20)</div>
-<div style="display: flex; gap: 8px; font-size: 12px; text-align: center;">
-<div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>1. Regularity</strong><br>(5 M)</div>
-<div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>2. Authenticity</strong><br>(5 M)</div>
-<div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>3. Reflection</strong><br>(5 M)</div>
-<div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>4. Creativity</strong><br>(5 M)</div>
-</div>
-<div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 25px; padding-top: 10px; border-top: 1px dashed #94A3B8; font-size: 12px;">
-<div>
-<div><strong>Student Signature:</strong> _____________________</div>
-<div style="color: #64748B; font-size: 11px; margin-top: 4px;">Date: {today_date_str}</div>
-</div>
-<div style="text-align: right;">
-<div><strong>Teacher Signature:</strong> _____________________</div>
-<div style="color: #64748B; font-size: 11px; margin-top: 4px;">Class Teacher (12-B)</div>
-</div>
-</div>
-</div>
-</div>"""
-            st.html(p2_html)
-
-            # Print Button
             st.divider()
-            col_p1, col_p2 = st.columns([1, 3])
-            with col_p1:
-                st.components.v1.html("""
-                    <button onclick="window.parent.print()" style="background-color: #1E3A8A; color: white; border: none; padding: 10px 20px; font-size: 14px; border-radius: 6px; cursor: pointer; font-weight: bold; width: 100%;">🖨️ Print / Save as PDF</button>
-                """, height=50)
-            with col_p2:
-                st.caption("Tip: Browser me **Save as PDF** select karke is 2-page portfolio card ko download kar sakte hain.")
+            st.components.v1.html(student_full_html, height=1100, scrolling=True)
 
         # --- TAB 2: UPLOAD PHOTO ---
         with tab_s2:
