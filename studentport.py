@@ -81,96 +81,46 @@ def init_db():
 
     # Students Table
     c.execute('''
-              CREATE TABLE IF NOT EXISTS students
-              (
-                  roll_no
-                  TEXT
-                  PRIMARY
-                  KEY,
-                  student_name
-                  TEXT
-                  NOT
-                  NULL,
-                  student_name_hindi
-                  TEXT,
-                  sr_no
-                  TEXT,
-                  roll_no_10th
-                  TEXT,
-                  pen_no
-                  TEXT,
-                  dob
-                  TEXT,
-                  father_name
-                  TEXT,
-                  father_name_hindi
-                  TEXT,
-                  mother_name
-                  TEXT,
-                  mother_name_hindi
-                  TEXT,
-                  gender
-                  TEXT,
-                  category
-                  TEXT,
-                  mob_no
-                  TEXT,
-                  email_id
-                  TEXT,
-                  address
-                  TEXT,
-                  academic_goals
-                  TEXT
-                  DEFAULT
-                  '',
-                  strengths_weaknesses
-                  TEXT
-                  DEFAULT
-                  '',
-                  photo_b64
-                  TEXT
-                  DEFAULT
-                  ''
-              )
-              ''')
+        CREATE TABLE IF NOT EXISTS students (
+            roll_no TEXT PRIMARY KEY,
+            student_name TEXT NOT NULL,
+            student_name_hindi TEXT,
+            sr_no TEXT,
+            roll_no_10th TEXT,
+            pen_no TEXT,
+            dob TEXT,
+            father_name TEXT,
+            father_name_hindi TEXT,
+            mother_name TEXT,
+            mother_name_hindi TEXT,
+            gender TEXT,
+            category TEXT,
+            mob_no TEXT,
+            email_id TEXT,
+            address TEXT,
+            academic_goals TEXT DEFAULT '',
+            strengths_weaknesses TEXT DEFAULT '',
+            photo_b64 TEXT DEFAULT ''
+        )
+    ''')
 
     # Submissions / Form Responses Table
     c.execute('''
-              CREATE TABLE IF NOT EXISTS portfolio_entries
-              (
-                  id
-                  INTEGER
-                  PRIMARY
-                  KEY
-                  AUTOINCREMENT,
-                  roll_no
-                  TEXT,
-                  activity_name
-                  TEXT
-                  NOT
-                  NULL,
-                  category
-                  TEXT,
-                  activity_date
-                  TEXT,
-                  student_description
-                  TEXT,
-                  student_reflection
-                  TEXT,
-                  evidence_link
-                  TEXT,
-                  marks_awarded
-                  INTEGER
-                  DEFAULT
-                  5,
-                  teacher_remarks
-                  TEXT
-                  DEFAULT
-                  'उत्कृष्ट सहभागिता',
-                  submitted_on
-                  TEXT
-              )
-              ''')
+        CREATE TABLE IF NOT EXISTS portfolio_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            roll_no TEXT,
+            activity_name TEXT NOT NULL,
+            category TEXT,
+            activity_date TEXT,
+            student_description TEXT,
+            student_reflection TEXT,
+            evidence_link TEXT,
+            marks_awarded INTEGER DEFAULT 5,
+            teacher_remarks TEXT DEFAULT 'उत्कृष्ट सहभागिता',
+            submitted_on TEXT,
+            UNIQUE(roll_no, activity_name) ON CONFLICT REPLACE
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -262,10 +212,8 @@ def generate_upboard_card(student, entries_df):
     else:
         photo_html = '<div style="font-size: 42px;">🎓</div><div style="font-size: 11px; color: #94A3B8;">फोटो प्रतीक्षित</div>'
 
-    # Activities / Form Entries Table Rows
     activities_rows = ""
     if entries_df.empty:
-        # Agar bache ka specific form entry abhi nahi hai, to official default calendar se entry render karein
         for act in DEFAULT_ACTIVITIES[:6]:
             activities_rows += f"""
             <tr style="border-bottom: 1px solid #E2E8F0; font-size: 12px;">
@@ -278,13 +226,17 @@ def generate_upboard_card(student, entries_df):
             """
     else:
         for _, itm in entries_df.iterrows():
+            reflection = itm['student_reflection'] if clean_val(itm['student_reflection']) else "सक्रिय प्रतिभागिता एवं अनुभव प्राप्त किया।"
+            desc = itm['student_description'] if clean_val(itm['student_description']) else "गतिविधि में सक्रिय योगदान"
+            marks = itm['marks_awarded'] if itm['marks_awarded'] else 5
+            
             activities_rows += f"""
             <tr style="border-bottom: 1px solid #E2E8F0; font-size: 12px;">
                 <td style="padding: 7px; text-align: center;">{itm['activity_date']}</td>
-                <td style="padding: 7px; font-weight: 600; color: #1E3A8A;">{itm['activity_name']}<br><span style="font-weight: normal; color: #475569; font-size: 11px;">{itm['student_description']}</span></td>
+                <td style="padding: 7px; font-weight: 600; color: #1E3A8A;">{itm['activity_name']}<br><span style="font-weight: normal; color: #475569; font-size: 11px;">{desc}</span></td>
                 <td style="padding: 7px; text-align: center;">{itm['category']}</td>
-                <td style="padding: 7px; color: #0284C7; font-style: italic;">{itm['student_reflection']}</td>
-                <td style="padding: 7px; text-align: center; font-weight: bold; color: #059669;">{itm['marks_awarded']}/5</td>
+                <td style="padding: 7px; color: #0284C7; font-style: italic;">{reflection}</td>
+                <td style="padding: 7px; text-align: center; font-weight: bold; color: #059669;">{marks}/5</td>
             </tr>
             """
 
@@ -333,7 +285,7 @@ def generate_upboard_card(student, entries_df):
             <div style="width: 28%; border: 2px dashed #94A3B8; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #F8FAFC; padding: 10px; text-align: center;">
                 {photo_html}
                 <div style="font-weight: bold; font-size: 13px; color: #1E3A8A; margin-top: 6px;">{student.get('student_name')}</div>
-                <div style="font-size: 11px; color: #64748B;">कक्षा: 12-B (विज्ञान/कला)</div>
+                <div style="font-size: 11px; color: #64748B;">कक्षा: 12-B</div>
                 <div style="font-size: 10px; color: #059669; margin-top: 4px; border: 1px solid #059669; padding: 2px 6px; border-radius: 8px;">सत्यापित विद्यार्थी</div>
             </div>
         </div>
@@ -440,7 +392,7 @@ with tabs[0]:
             stu_cols = [desc[0] for desc in c.description]
             student_dict = dict(zip(stu_cols, stu_row))
 
-            entries_df = pd.read_sql_query("SELECT * FROM portfolio_entries WHERE roll_no=? ORDER BY id DESC", conn,
+            entries_df = pd.read_sql_query("SELECT * FROM portfolio_entries WHERE roll_no=? ORDER BY id ASC", conn,
                                            params=(selected_roll,))
             portfolio_html = generate_upboard_card(student_dict, entries_df)
 
@@ -452,8 +404,7 @@ with tabs[0]:
                 type="primary",
                 use_container_width=True
             )
-            st.caption(
-                "💡 डाउनलोड की गई HTML फ़ाइल को किसी भी फ़ोन या कंप्यूटर में खोलकर सीधे 'Print' या 'Save as PDF' कर सकते हैं।")
+            st.caption("💡 डाउनलोड की गई HTML फ़ाइल को किसी भी ब्राउज़र में खोलकर Ctrl+P दबाकर सीधे 'Save as PDF' या प्रिंट कर सकते हैं।")
 
         with col_s2:
             st.info(
@@ -462,13 +413,13 @@ with tabs[0]:
         st.divider()
         st.components.v1.html(portfolio_html, height=1150, scrolling=True)
 
+
 # --- TAB 2: GOOGLE FORM DATA SYNC / MANUAL INPUT ---
 with tabs[1]:
     st.subheader("📥 Google Form डेटा सिंक (Response Sheet)")
-    st.write(
-        "बच्चे Google Form भरकर जो Google Sheet बनाएंगे, उसे CSV/Excel रूप में डाउनलोड करके यहाँ 1-क्लिक में सिंक करें:")
+    st.write("छात्रों द्वारा Google Form भरने के बाद लिंक हुई Google Sheet को **File -> Download -> Microsoft Excel (.xlsx) या CSV (.csv)** के रूप में डाउनलोड करके यहाँ अपलोड करें:")
 
-    col_up1, col_up2 = st.columns(2)
+    col_up1, col_up2 = st.columns([1.2, 1])
     with col_up1:
         uploaded_form = st.file_uploader("Google Form Responses File (.xlsx / .csv)", type=["xlsx", "csv"])
         if uploaded_form is not None:
@@ -478,35 +429,65 @@ with tabs[1]:
                 else:
                     df_form = pd.read_excel(uploaded_form, dtype=str)
 
-                st.write("Uploaded Responses Preview:", df_form.head(3))
-                if st.button("Sync Responses to Portfolios", type="primary"):
-                    c = conn.cursor()
-                    success_add = 0
-                    for _, r in df_form.iterrows():
-                        # Robust field mapping
-                        r_no = clean_val(r.get("Roll No", r.get("ROLL NO", r.get("Roll Number", ""))))
-                        act_name = clean_val(r.get("Activity Name", r.get("गतिविधि का नाम", r.get("प्रतियोगिता", ""))))
-                        desc = clean_val(r.get("Description", r.get("विवरण", "")))
-                        refl = clean_val(r.get("Reflection", r.get("सीख", r.get("विद्यार्थी चिंतन", ""))))
-                        link = clean_val(r.get("Link", r.get("फोटो लिंक", "")))
+                st.write(f"📊 कुल प्रविष्टियाँ (Responses found): **{len(df_form)}**")
+                st.dataframe(df_form.head(2), use_container_width=True)
 
-                        if r_no and act_name:
-                            today_now = datetime.now().strftime("%d.%m.%Y")
-                            c.execute("""
-                                      INSERT INTO portfolio_entries (roll_no, activity_name, category, activity_date,
-                                                                     student_description, student_reflection,
-                                                                     evidence_link, submitted_on)
-                                      VALUES (?, ?, 'सह-पाठ्यचर्या', ?, ?, ?, ?, ?)
-                                      """, (r_no, act_name, today_now, desc, refl, link, today_now))
-                            success_add += 1
-                    conn.commit()
-                    st.success(f"{success_add} Google Form प्रविष्टियाँ पोर्टफोलियो में सफलतापूर्वक सिंक हो गईं!")
-                    st.rerun()
+                if st.button("⚡ Sync Responses to Portfolios", type="primary"):
+                    c = conn.cursor()
+                    success_count = 0
+                    
+                    # Columns identify logic
+                    cols = list(df_form.columns)
+                    
+                    # Find roll number column
+                    roll_col = next((col for col in cols if "roll" in col.lower() or "अनुक्रमांक" in col), None)
+
+                    if not roll_col:
+                        st.error("शीट में Roll Number का कॉलम नहीं मिला! कृपया सुनिश्चित करें कि फॉर्म में 'Roll Number' मौजूद है।")
+                    else:
+                        for _, r in df_form.iterrows():
+                            r_no = clean_val(r.get(roll_col, ""))
+                            if not r_no:
+                                continue
+
+                            # Loop through each official activity to see if this student responded
+                            for act in DEFAULT_ACTIVITIES:
+                                act_num = str(act["sno"])
+                                act_name = act["name"]
+                                
+                                # Match columns for this activity
+                                desc_col = next((c_name for c_name in cols if f"[{act_num}." in c_name and ("description" in c_name.lower() or "कार्य किया" in c_name)), None)
+                                refl_col = next((c_name for c_name in cols if f"[{act_num}." in c_name and ("reflection" in c_name.lower() or "सीखा" in c_name)), None)
+                                link_col = next((c_name for c_name in cols if f"[{act_num}." in c_name and ("link" in c_name.lower() or "photo" in c_name.lower() or "drive" in c_name.lower())), None)
+
+                                desc_val = clean_val(r.get(desc_col, "")) if desc_col else ""
+                                refl_val = clean_val(r.get(refl_col, "")) if refl_col else ""
+                                link_val = clean_val(r.get(link_col, "")) if link_col else ""
+
+                                # Only add if student submitted something for this activity
+                                if desc_val or refl_val or link_val:
+                                    today_now = datetime.now().strftime("%d-%m-%Y")
+                                    c.execute("""
+                                        INSERT INTO portfolio_entries (
+                                            roll_no, activity_name, category, activity_date,
+                                            student_description, student_reflection, evidence_link, 
+                                            marks_awarded, submitted_on
+                                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 5, ?)
+                                    """, (
+                                        r_no, act_name, act["cat"], act["date"],
+                                        desc_val, refl_val, link_val, today_now
+                                    ))
+                                    success_count += 1
+
+                        conn.commit()
+                        st.success(f"🎉 बधाई! कुल {success_count} गतिविधि प्रविष्टियाँ सफलतापूर्वक पोर्टफोलियो में सिंक हो गईं!")
+                        st.rerun()
+
             except Exception as e:
-                st.error(f"Error reading form file: {e}")
+                st.error(f"फॉर्म फ़ाइल पढ़ने में त्रुटि: {e}")
 
     with col_up2:
-        st.write("#### या सीधे यहाँ से किसी छात्र की गतिविधि दर्ज करें:")
+        st.write("#### या किसी छात्र की गतिविधि सीधे दर्ज करें:")
         with st.form("manual_entry_form"):
             m_roll = st.selectbox("विद्यार्थी (Roll No):",
                                   students_df["roll_no"].tolist() if not students_df.empty else [])
@@ -515,22 +496,23 @@ with tabs[1]:
             m_refl = st.text_area("विद्यार्थी का चिंतन (सीख):", placeholder="इस गतिविधि से क्या सीखा...")
             m_marks = st.slider("अंक (Rubric Marks 1-5):", 1, 5, 5)
 
-            if st.form_submit_button("पोर्टफोलियो में जोड़ें"):
+            if st.form_submit_button("पोर्टफोलियो में सुरक्षित करें"):
                 c = conn.cursor()
-                # Find matching default activity for date & category
                 act_info = next((item for item in DEFAULT_ACTIVITIES if item["name"] == m_act), None)
                 act_date = act_info["date"] if act_info else datetime.now().strftime("%d.%m.%Y")
                 act_cat = act_info["cat"] if act_info else "सह-पाठ्यचर्या"
 
                 c.execute("""
-                          INSERT INTO portfolio_entries (roll_no, activity_name, category, activity_date,
-                                                         student_description, student_reflection, marks_awarded,
-                                                         submitted_on)
-                          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                          """, (m_roll, m_act, act_cat, act_date, m_desc, m_refl, m_marks,
-                                datetime.now().strftime("%d-%m-%Y")))
+                    INSERT INTO portfolio_entries (
+                        roll_no, activity_name, category, activity_date,
+                        student_description, student_reflection, marks_awarded, submitted_on
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    m_roll, m_act, act_cat, act_date, m_desc, m_refl, m_marks,
+                    datetime.now().strftime("%d-%m-%Y")
+                ))
                 conn.commit()
-                st.success("गतिविधि छात्र पोर्टफोलियो में जुड़ गई!")
+                st.success("गतिविधि छात्र के पोर्टफोलियो में सुरक्षित हो गई!")
                 st.rerun()
 
 # --- TAB 3: PROFILES & PHOTO UPLOAD ---
@@ -552,15 +534,10 @@ with tabs[2]:
 
         with col_ph2:
             all_records = pd.read_sql_query("""
-                                            SELECT roll_no,
-                                                   student_name,
-                                                   father_name,
-                                                   sr_no,
-                                                   mob_no,
-                                                   CASE WHEN photo_b64 != '' THEN 'Uploaded ✅' ELSE 'Pending ❌' END AS Photo
-                                            FROM students
-                                            ORDER BY CAST(roll_no AS INTEGER) ASC
-                                            """, conn)
+                SELECT roll_no, student_name, father_name, sr_no, mob_no,
+                       CASE WHEN photo_b64 != '' THEN 'Uploaded ✅' ELSE 'Pending ❌' END AS Photo
+                FROM students ORDER BY CAST(roll_no AS INTEGER) ASC
+            """, conn)
             st.dataframe(all_records, use_container_width=True)
 
 # --- TAB 4: 14 OFFICIAL ACTIVITIES CALENDAR ---
@@ -583,19 +560,19 @@ with tabs[4]:
             st.rerun()
 
     with col_mg2:
-        st.write("#### 2. गलत गतिविधि एंट्री डिलीट करें")
+        st.write("#### 2. गलत गतिविधि प्रविष्टि डिलीट करें")
         all_entries = pd.read_sql_query(
             "SELECT id, roll_no, activity_name, activity_date FROM portfolio_entries ORDER BY id DESC", conn)
         if not all_entries.empty:
-            del_id = st.selectbox("हटाने हेतु एंट्री चुनें:", all_entries["id"].tolist(), format_func=lambda
+            del_id = st.selectbox("हटाने हेतु प्रविष्टि चुनें:", all_entries["id"].tolist(), format_func=lambda
                 x: f"ID {x} : Roll {all_entries[all_entries['id'] == x]['roll_no'].values[0]} - {all_entries[all_entries['id'] == x]['activity_name'].values[0]}")
             if st.button("Delete Entry", type="secondary"):
                 c = conn.cursor()
                 c.execute("DELETE FROM portfolio_entries WHERE id=?", (del_id,))
                 conn.commit()
-                st.success("एंट्री डिलीट हो गई!")
+                st.success("प्रविष्टि डिलीट हो गई!")
                 st.rerun()
         else:
-            st.info("डिलीट करने के लिए कोई अलग एंट्री नहीं है।")
+            st.info("डिलीट करने के लिए कोई अलग प्रविष्टि नहीं है।")
 
 conn.close()
