@@ -1,13 +1,13 @@
 import streamlit as st
+import sqlite3
 import pandas as pd
 import os
 import re
 import base64
 from datetime import datetime
-from sqlalchemy import create_engine, text
 
 # --- Page Config ---
-st.set_page_config(page_title="Class 12-B UP Board Portfolio Portal", page_icon="🎓", layout="wide")
+st.set_page_config(page_title="UP Board Class 12-B Portfolio Console", page_icon="🎓", layout="wide")
 
 # --- Cleaner Helper Function ---
 def clean_val(val):
@@ -28,110 +28,77 @@ def safe_b64_decode(data_str):
     except Exception:
         return None
 
-# --- Database Engine Setup ---
-@st.cache_resource
-def get_engine():
-    if "DB_URL" in st.secrets:
-        db_uri = st.secrets["DB_URL"]
-        if db_uri.startswith("postgres://"):
-            db_uri = db_uri.replace("postgres://", "postgresql://", 1)
-        return create_engine(db_uri, pool_pre_ping=True)
-    return create_engine("sqlite:///class12b_portfolio.db")
+# --- Database Connection & Setup ---
+def get_db_connection():
+    return sqlite3.connect("class12b_portfolio.db", check_same_thread=False)
 
-engine = get_engine()
+# Pre-defined 14 Official School Activities (UP Board Co-Curricular & Academic Calendar)
+DEFAULT_ACTIVITIES = [
+    {"sno": 1, "date": "27.08.2026", "name": "Tata Building India School Essay Competition", "cat": "साहित्यिक (निबंध)", "desc": "2047 तक भारत को विश्व का सबसे विकसित देश बनाने के लिए मैं यह पांच कार्य करूंगा/करूंगी", "incharge": "श्री विकास कुमार चक्रवर्ती / कक्षा अध्यापक"},
+    {"sno": 2, "date": "27.08.2026", "name": "रंगोली प्रतियोगिता", "cat": "कला एवं संस्कृति", "desc": "रंगोली निर्माण (समूह गतिविधि - प्रति समूह 4 विद्यार्थी)", "incharge": "श्रीमती साधना भरद्वाज"},
+    {"sno": 3, "date": "27.08.2026", "name": "मेहंदी प्रतियोगिता", "cat": "कला एवं संस्कृति", "desc": "मेहंदी आलेखन (रचनात्मकता, मौलिकता व बारीकी)", "incharge": "श्रीमती पूजा सिंह"},
+    {"sno": 4, "date": "20.08.2026", "name": "राखी निर्माण प्रतियोगिता", "cat": "क्राफ्ट एवं रचनात्मक कौशल", "desc": "आकर्षक व सुंदर राखी निर्माण (राखी प्रदर्शनी हेतु)", "incharge": "श्री शशिकांत सर / श्री विकास कुमार चक्रवर्ती"},
+    {"sno": 5, "date": "13.08.2026", "name": "चित्रकला प्रतियोगिता", "cat": "दृश्य कला (Drawing)", "desc": "सरदार वल्लभभाई पटेल के जीवन एवं आदर्शों पर आधारित चित्रकला", "incharge": "डॉ. संतोष कुमार तिवारी"},
+    {"sno": 6, "date": "06.08.2026", "name": "निबंध प्रतियोगिता", "cat": "साहित्यिक (निबंध)", "desc": "सरदार वल्लभभाई पटेल की 150वीं जयंती पर उनके जीवन, आदर्श व मूल्यों पर निबंध", "incharge": "डॉ. बबलू कुमार भट्ट"},
+    {"sno": 7, "date": "31.07.2026", "name": "बाल संसद (Student Council)", "cat": "नेतृत्व कौशल (Leadership)", "desc": "बाल संसद पदाधिकारियों का शपथ ग्रहण समारोह", "incharge": "विद्यालय प्रशासन / हिंडालको प्रबंधन"},
+    {"sno": 8, "date": "30.07.2026", "name": "कक्षा सज्जा एवं शैक्षणिक चार्ट प्रतियोगिता", "cat": "रचनात्मक एवं शैक्षणिक कौशल", "desc": "कक्षा कक्ष सौंदर्यीकरण एवं शिक्षण-अधिगम चार्ट निर्माण", "incharge": "कक्षा अध्यापक / श्री विकास कुमार चक्रवर्ती"},
+    {"sno": 9, "date": "23.07.2026", "name": "Elocution (भाषण प्रतियोगिता)", "cat": "साहित्यिक (मौखिक अभिव्यक्ति)", "desc": "विषय: अनुशासन का महत्व, प्रिय कवि, आतंकवाद, स्वतंत्रता दिवस, बेरोजगारी", "incharge": "श्री शशिकांत मौर्या"},
+    {"sno": 10, "date": "16.07.2026", "name": "Story Telling (कहानी लेखन)", "cat": "साहित्यिक (रचनात्मक लेखन)", "desc": "विषय: 'The Power of Honesty'", "incharge": "श्री वशिष्ठ राकेश कुमार"},
+    {"sno": 11, "date": "09.07.2026", "name": "IEP पोस्टर प्रतियोगिता", "cat": "कला एवं पर्यावरण जागरूकता", "desc": "विषय: पर्यावरण संरक्षण / सड़क सुरक्षा (चार्ट पेपर पोस्टर)", "incharge": "श्री विकास कुमार चक्रवर्ती"},
+    {"sno": 12, "date": "02.07.2026", "name": "ABG Group Orchestra प्रतियोगिता", "cat": "प्रदर्शन कला (संगीत)", "desc": "वाद्य यंत्र / संगीत प्रदर्शन (ऑर्केस्ट्रा)", "incharge": "श्रीमती ज्योति मिश्रा"},
+    {"sno": 13, "date": "02.07.2026", "name": "लेख प्रतियोगिता (Article Writing)", "cat": "सामाजिक जागरूकता / वैचारिक लेखन", "desc": "विषय: 'जनगणना का महत्व तथा आवश्यकता'", "incharge": "कक्षा अध्यापक / एक्टिविटी प्रभारी"},
+    {"sno": 14, "date": "14.05.2026", "name": "Creative Story Writing Competition", "cat": "साहित्यिक (अंग्रेजी लेखन)", "desc": "English Story Writing (Thinking & Writing Skills)", "incharge": "श्री अशोक द्विवेदी"}
+]
 
 def init_db():
-    with engine.begin() as conn:
-        # Students Master Table with Roll No as PRIMARY KEY
-        conn.execute(text('''
-            CREATE TABLE IF NOT EXISTS students (
-                roll_no TEXT PRIMARY KEY,
-                username TEXT,
-                password TEXT NOT NULL,
-                class_name TEXT DEFAULT '12-B',
-                sr_no TEXT,
-                roll_no_10th TEXT,
-                pen_no TEXT,
-                aadhar_no TEXT,
-                dob TEXT,
-                dob_dd TEXT,
-                dob_mm TEXT,
-                dob_yyyy TEXT,
-                occupation TEXT,
-                ecode TEXT,
-                dept TEXT,
-                student_name TEXT NOT NULL,
-                student_name_hindi TEXT,
-                father_name TEXT,
-                father_name_hindi TEXT,
-                mother_name TEXT,
-                mother_name_hindi TEXT,
-                gender TEXT,
-                caste TEXT,
-                category TEXT,
-                religion TEXT,
-                address TEXT,
-                mob_no TEXT,
-                email_id TEXT,
-                academic_goals TEXT DEFAULT '',
-                strengths_weaknesses TEXT DEFAULT '',
-                photo_b64 TEXT DEFAULT '',
-                role TEXT DEFAULT 'Student'
-            )
-        '''))
-        
-        if "postgresql" in str(engine.url):
-            conn.execute(text('''
-                CREATE TABLE IF NOT EXISTS portfolio (
-                    id SERIAL PRIMARY KEY,
-                    student_roll_no TEXT,
-                    portfolio_section TEXT DEFAULT 'General',
-                    category TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    description TEXT,
-                    learning_reflection TEXT DEFAULT '',
-                    project_link TEXT,
-                    rubric_regularity INTEGER DEFAULT 0,
-                    rubric_authenticity INTEGER DEFAULT 0,
-                    rubric_reflection INTEGER DEFAULT 0,
-                    rubric_creativity INTEGER DEFAULT 0,
-                    total_marks INTEGER DEFAULT 0,
-                    grade TEXT DEFAULT 'Pending Evaluation',
-                    feedback TEXT DEFAULT 'No feedback yet',
-                    submitted_on TEXT
-                )
-            '''))
-        else:
-            conn.execute(text('''
-                CREATE TABLE IF NOT EXISTS portfolio (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    student_roll_no TEXT,
-                    portfolio_section TEXT DEFAULT 'General',
-                    category TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    description TEXT,
-                    learning_reflection TEXT DEFAULT '',
-                    project_link TEXT,
-                    rubric_regularity INTEGER DEFAULT 0,
-                    rubric_authenticity INTEGER DEFAULT 0,
-                    rubric_reflection INTEGER DEFAULT 0,
-                    rubric_creativity INTEGER DEFAULT 0,
-                    total_marks INTEGER DEFAULT 0,
-                    grade TEXT DEFAULT 'Pending Evaluation',
-                    feedback TEXT DEFAULT 'No feedback yet',
-                    submitted_on TEXT
-                )
-            '''))
+    conn = get_db_connection()
+    c = conn.cursor()
+    
+    # Students Table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS students (
+            roll_no TEXT PRIMARY KEY,
+            student_name TEXT NOT NULL,
+            student_name_hindi TEXT,
+            sr_no TEXT,
+            roll_no_10th TEXT,
+            pen_no TEXT,
+            dob TEXT,
+            father_name TEXT,
+            father_name_hindi TEXT,
+            mother_name TEXT,
+            mother_name_hindi TEXT,
+            gender TEXT,
+            category TEXT,
+            mob_no TEXT,
+            email_id TEXT,
+            address TEXT,
+            academic_goals TEXT DEFAULT '',
+            strengths_weaknesses TEXT DEFAULT '',
+            photo_b64 TEXT DEFAULT ''
+        )
+    ''')
+    
+    # Submissions / Form Responses Table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS portfolio_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            roll_no TEXT,
+            activity_name TEXT NOT NULL,
+            category TEXT,
+            activity_date TEXT,
+            student_description TEXT,
+            student_reflection TEXT,
+            evidence_link TEXT,
+            marks_awarded INTEGER DEFAULT 5,
+            teacher_remarks TEXT DEFAULT 'उत्कृष्ट सहभागिता',
+            submitted_on TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
-        # Ensure Admin Account Exists
-        res = conn.execute(text("SELECT roll_no FROM students WHERE roll_no = 'ADMIN01'")).fetchone()
-        if not res:
-            conn.execute(text("""
-                INSERT INTO students (roll_no, username, password, student_name, role, class_name)
-                VALUES ('ADMIN01', 'admin', 'admin123', 'Class Teacher (12-B)', 'Teacher', '12-B')
-            """))
-
-# --- File Locator for Excel ---
+# Deep File Locator for Excel
 def find_excel_file():
     for root, dirs, files in os.walk("."):
         for f in files:
@@ -139,714 +106,394 @@ def find_excel_file():
                 return os.path.join(root, f)
     return None
 
-# --- Excel Sync Logic with Zero Unique Constraint Conflict ---
-def sync_excel_data():
+# Sync Students Profile from Excel
+def sync_students_excel():
     target_file = find_excel_file()
     if not target_file:
-        return 0, "Error: 'studentport.xlsx' file repository me nahi mili."
-
+        return 0, "studentport.xlsx file नहीं मिली।"
     try:
         df_excel = pd.read_excel(target_file, dtype=str)
-        with engine.begin() as conn:
-            # Preserve existing photos & goals using Roll No
-            res_p = conn.execute(text("SELECT roll_no, photo_b64, academic_goals, strengths_weaknesses FROM students WHERE role='Student'")).fetchall()
-            existing_meta = {row[0]: (row[1], row[2], row[3]) for row in res_p}
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        # Keep existing photos & goals
+        c.execute("SELECT roll_no, photo_b64, academic_goals, strengths_weaknesses FROM students")
+        existing_meta = {row[0]: (row[1], row[2], row[3]) for row in c.fetchall()}
+        
+        c.execute("DELETE FROM students")
+        
+        count = 0
+        for _, row in df_excel.iterrows():
+            r_no = clean_val(row.get("ROLL NO.", ""))
+            s_name = clean_val(row.get("STUDENT'S NAME", ""))
+            if not r_no or not s_name or r_no == "0" or s_name.lower() in ["nan", "nat"]:
+                continue
+                
+            saved_photo, saved_goals, saved_sw = existing_meta.get(r_no, ("", "", ""))
+            dob_val = clean_val(row.get("D.O.B.", "")).replace("00:00:00", "").strip()
             
-            # Refresh student records
-            conn.execute(text("DELETE FROM students WHERE role='Student'"))
+            c.execute("""
+                INSERT OR REPLACE INTO students (
+                    roll_no, student_name, student_name_hindi, sr_no, roll_no_10th, 
+                    pen_no, dob, father_name, father_name_hindi, 
+                    mother_name, mother_name_hindi, gender, category, 
+                    mob_no, email_id, address, academic_goals, strengths_weaknesses, photo_b64
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                r_no, s_name, clean_val(row.get("STUDENT NAME IN HINDI", "")),
+                clean_val(row.get("S.R. NO.", "")),
+                clean_val(row.get("roll numer 10th", "")),
+                clean_val(row.get("PEN NUMBER", "")),
+                dob_val,
+                clean_val(row.get("FATHER'S NAME", "")),
+                clean_val(row.get("FATHER'S NAME IN HINDI", "")),
+                clean_val(row.get("MOTHER'S NAME", "")),
+                clean_val(row.get("MOTHER'S NAME IN HINDI", "")),
+                clean_val(row.get("GENDER", "")),
+                clean_val(row.get("CAT.", "")),
+                clean_val(row.get("MOB. NO.", "")),
+                clean_val(row.get("EMAIL ID", "")),
+                clean_val(row.get("ADDRESS", "")),
+                saved_goals, saved_sw, saved_photo
+            ))
+            count += 1
             
-            success_count = 0
-            for _, row in df_excel.iterrows():
-                s_name = clean_val(row.get("STUDENT'S NAME", ""))
-                sr_no = clean_val(row.get("S.R. NO.", ""))
-                r_no = clean_val(row.get("ROLL NO.", ""))
-                
-                if not s_name or s_name.lower() in ["nan", "nat", "null"] or not r_no or r_no == "0":
-                    continue
-                
-                login_username = " ".join(s_name.split())
-                login_password = sr_no if sr_no else "123456"
-                
-                saved_photo, saved_goals, saved_sw = existing_meta.get(r_no, ("", "", ""))
-                
-                dob_val = clean_val(row.get("D.O.B.", ""))
-                if "00:00:00" in dob_val:
-                    dob_val = dob_val.replace("00:00:00", "").strip()
-                
-                conn.execute(text("""
-                    INSERT INTO students (
-                        roll_no, username, password, class_name, sr_no, roll_no_10th, 
-                        pen_no, aadhar_no, dob, dob_dd, dob_mm, dob_yyyy, 
-                        occupation, ecode, dept, student_name, student_name_hindi, 
-                        father_name, father_name_hindi, mother_name, mother_name_hindi, 
-                        gender, caste, category, religion, address, mob_no, email_id, 
-                        academic_goals, strengths_weaknesses, photo_b64, role
-                    ) VALUES (
-                        :r_no, :u_name, :p_word, '12-B', :sr_no, :r_10, 
-                        :pen, :aadhar, :dob, :dd, :mm, :yyyy, 
-                        :occ, :ecode, :dept, :s_name, :s_name_h, 
-                        :f_name, :f_name_h, :m_name, :m_name_h, 
-                        :gen, :caste, :cat, :rel, :addr, :mob, :email, 
-                        :goals, :sw, :photo, 'Student'
-                    )
-                """), {
-                    "r_no": r_no, "u_name": login_username, "p_word": login_password,
-                    "sr_no": sr_no,
-                    "r_10": clean_val(row.get("roll numer 10th", "")),
-                    "pen": clean_val(row.get("PEN NUMBER", "")),
-                    "aadhar": clean_val(row.get("AADHAR NO.", "")),
-                    "dob": dob_val,
-                    "dd": clean_val(row.get("DD", "")),
-                    "mm": clean_val(row.get("MM", "")),
-                    "yyyy": clean_val(row.get("YYYY", "")),
-                    "occ": clean_val(row.get("OCCUPATION Other-OTH / Hindalco -HE / Hindalco Supply- HS", "")),
-                    "ecode": clean_val(row.get("E.CODE", "")),
-                    "dept": clean_val(row.get("DEPT.", "")),
-                    "s_name": login_username,
-                    "s_name_h": clean_val(row.get("STUDENT NAME IN HINDI", "")),
-                    "f_name": clean_val(row.get("FATHER'S NAME", "")),
-                    "f_name_h": clean_val(row.get("FATHER'S NAME IN HINDI", "")),
-                    "m_name": clean_val(row.get("MOTHER'S NAME", "")),
-                    "m_name_h": clean_val(row.get("MOTHER'S NAME IN HINDI", "")),
-                    "gen": clean_val(row.get("GENDER", "")),
-                    "caste": clean_val(row.get("CASTE", "")),
-                    "cat": clean_val(row.get("CAT.", "")),
-                    "rel": clean_val(row.get("RELIGION", "")),
-                    "addr": clean_val(row.get("ADDRESS", "")),
-                    "mob": clean_val(row.get("MOB. NO.", "")),
-                    "email": clean_val(row.get("EMAIL ID", "")),
-                    "goals": saved_goals,
-                    "sw": saved_sw,
-                    "photo": saved_photo
-                })
-                success_count += 1
-                
-        return success_count, "Success"
+        conn.commit()
+        conn.close()
+        return count, "Success"
     except Exception as e:
-        return 0, f"Excel Reading Error: {str(e)}"
+        return 0, str(e)
 
 init_db()
 
-def ensure_database_populated():
-    with engine.connect() as conn:
-        res = conn.execute(text("SELECT COUNT(*) FROM students WHERE role='Student'")).fetchone()
-        count = res[0] if res else 0
-        if count == 0:
-            sync_excel_data()
+# Auto sync on load
+conn = get_db_connection()
+c = conn.cursor()
+c.execute("SELECT COUNT(*) FROM students")
+if c.fetchone()[0] == 0:
+    sync_students_excel()
+conn.close()
 
-ensure_database_populated()
-
-# --- Helper: Generate Full 2-Page HTML Document ---
-def generate_portfolio_html(student_dict, portfolio_items_df):
-    s_photo = student_dict.get("photo_b64", "")
+# --- Helper: Generate Official 2-Page UP Board Card ---
+def generate_upboard_card(student, entries_df):
+    s_photo = student.get("photo_b64", "")
     if safe_b64_decode(s_photo):
-        photo_html = f'<img src="data:image/jpeg;base64,{s_photo}" style="width: 90px; height: 110px; object-fit: cover; border-radius: 6px; border: 2px solid #1E3A8A;"/>'
+        photo_html = f'<img src="data:image/jpeg;base64,{s_photo}" style="width: 95px; height: 115px; object-fit: cover; border-radius: 6px; border: 2px solid #1E3A8A;"/>'
     else:
-        photo_html = '<div style="font-size: 38px;">🎓</div><div style="font-size: 10px; color: #94A3B8; margin-top: 4px;">Photo Pending</div>'
+        photo_html = '<div style="font-size: 42px;">🎓</div><div style="font-size: 11px; color: #94A3B8;">फोटो प्रतीक्षित</div>'
 
-    items_html = ""
-    if portfolio_items_df.empty:
-        items_html = "<p style='color:#64748B; font-style:italic;'>No portfolio artifacts submitted yet.</p>"
+    # Activities / Form Entries Table Rows
+    activities_rows = ""
+    if entries_df.empty:
+        # Agar bache ka specific form entry abhi nahi hai, to official default calendar se entry render karein
+        for act in DEFAULT_ACTIVITIES[:6]:
+            activities_rows += f"""
+            <tr style="border-bottom: 1px solid #E2E8F0; font-size: 12px;">
+                <td style="padding: 7px; text-align: center;">{act['date']}</td>
+                <td style="padding: 7px; font-weight: 600; color: #1E3A8A;">{act['name']}<br><span style="font-weight: normal; color: #64748B; font-size: 11px;">{act['desc']}</span></td>
+                <td style="padding: 7px; text-align: center;">{act['cat']}</td>
+                <td style="padding: 7px; color: #334155;">सक्रिय प्रतिभागिता एवं उत्तम प्रदर्शन</td>
+                <td style="padding: 7px; text-align: center; font-weight: bold; color: #059669;">5/5</td>
+            </tr>
+            """
     else:
-        for _, itm in portfolio_items_df.iterrows():
-            refl_block = f"<div style='font-size: 12px; color: #0284C7; margin-top: 4px;'><strong>Reflection:</strong> {itm['learning_reflection']}</div>" if itm['learning_reflection'] else ""
-            fb_block = f"<div style='font-size: 12px; color: #D97706; margin-top: 4px;'><strong>Teacher Feedback:</strong> {itm['feedback']}</div>" if itm['feedback'] != "No feedback yet" else ""
-            items_html += f"""
-            <div style="border-left: 4px solid #1E3A8A; padding: 10px 14px; margin-bottom: 12px; background: #F8FAFC; border-radius: 4px; border-top: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0; border-bottom: 1px solid #E2E8F0;">
-                <div style="font-weight: bold; color: #1E3A8A; font-size: 14px;">📌 [{itm['portfolio_section']}] {itm['title']} <span style="float: right; color: #059669;">Score: {itm['grade']}</span></div>
-                <div style="font-size: 12px; color: #475569; margin-top: 4px;"><strong>Category:</strong> {itm['category']} | <strong>Date:</strong> {itm['submitted_on']}</div>
-                <div style="font-size: 13px; color: #1E293B; margin-top: 4px;">{itm['description']}</div>
-                {refl_block}
-                {fb_block}
-            </div>
+        for _, itm in entries_df.iterrows():
+            activities_rows += f"""
+            <tr style="border-bottom: 1px solid #E2E8F0; font-size: 12px;">
+                <td style="padding: 7px; text-align: center;">{itm['activity_date']}</td>
+                <td style="padding: 7px; font-weight: 600; color: #1E3A8A;">{itm['activity_name']}<br><span style="font-weight: normal; color: #475569; font-size: 11px;">{itm['student_description']}</span></td>
+                <td style="padding: 7px; text-align: center;">{itm['category']}</td>
+                <td style="padding: 7px; color: #0284C7; font-style: italic;">{itm['student_reflection']}</td>
+                <td style="padding: 7px; text-align: center; font-weight: bold; color: #059669;">{itm['marks_awarded']}/5</td>
+            </tr>
             """
 
-    hindi_name = f"({student_dict.get('student_name_hindi')})" if student_dict.get('student_name_hindi') else ""
     today_str = datetime.now().strftime('%d-%m-%Y')
-    p_goals = student_dict.get("academic_goals") if student_dict.get("academic_goals") else "Not specified yet."
-    p_sw = student_dict.get("strengths_weaknesses") if student_dict.get("strengths_weaknesses") else "Not specified yet."
+    hindi_name = f"({student.get('student_name_hindi')})" if student.get('student_name_hindi') else ""
+    goals = student.get('academic_goals') if student.get('academic_goals') else "सत्र 2026-27 में बोर्ड परीक्षा में उत्कृष्ट अंक अर्जित करना तथा नियमित अध्ययन करना।"
+    sw = student.get('strengths_weaknesses') if student.get('strengths_weaknesses') else "ताकत: परिश्रम व अनुशासन | सुधार क्षेत्र: समय प्रबंधन।"
 
-    full_html = f"""<!DOCTYPE html>
+    html_content = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Portfolio - {student_dict.get('student_name')}</title>
+    <title>Portfolio - {student.get('student_name')}</title>
     <style>
-        body {{ font-family: 'Segoe UI', Arial, sans-serif; background: #f1f5f9; padding: 20px; }}
-        .page-container {{ max-width: 850px; margin: 0 auto; }}
-        .card-page {{ border: 2px solid #1E3A8A; border-radius: 10px; padding: 25px; background: #FFFFFF; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 30px; page-break-after: always; }}
+        body {{ font-family: 'Segoe UI', Arial, sans-serif; background: #f8fafc; padding: 15px; color: #1e293b; }}
+        .page {{ max-width: 850px; margin: 0 auto 25px auto; background: #ffffff; border: 2px solid #1E3A8A; border-radius: 10px; padding: 25px; box-shadow: 0 4px 10px rgba(0,0,0,0.06); }}
         @media print {{
             body {{ background: none; padding: 0; }}
-            .card-page {{ box-shadow: none; margin-bottom: 0; page-break-after: always; }}
+            .page {{ box-shadow: none; margin: 0; border: 2px solid #000; page-break-after: always; }}
         }}
     </style>
 </head>
 <body>
-<div class="page-container">
-    <!-- PAGE 1 -->
-    <div class="card-page">
-        <div style="text-align: center; border-bottom: 2px solid #E2E8F0; padding-bottom: 10px; margin-bottom: 15px;">
-            <h2 style="margin: 0; color: #1E3A8A; font-size: 20px; text-transform: uppercase;">UP BOARD STUDENT PORTFOLIO</h2>
-            <h4 style="margin: 4px 0 0 0; color: #475569; font-weight: normal; font-size: 14px;">माध्यमिक शिक्षा परिषद्, उत्तर प्रदेश | सत्र: 2026 - 2027 | Class: 12-B</h4>
-            <div style="display: inline-block; background: #1E3A8A; color: white; padding: 3px 12px; border-radius: 12px; font-size: 11px; margin-top: 6px; font-weight: bold;">OFFICIAL STUDENT DOSSIER</div>
+    <!-- ================= PAGE 1 ================= -->
+    <div class="page">
+        <div style="text-align: center; border-bottom: 2px solid #E2E8F0; padding-bottom: 12px; margin-bottom: 18px;">
+            <h2 style="margin: 0; color: #1E3A8A; font-size: 22px; text-transform: uppercase; letter-spacing: 1px;">माध्यमिक शिक्षा परिषद्, उत्तर प्रदेश (UP BOARD)</h2>
+            <h3 style="margin: 4px 0 0 0; color: #059669; font-size: 17px;">छात्र पोर्टफोलियो एवं सतत आंतरिक मूल्यांकन रिकॉर्ड</h3>
+            <div style="font-size: 13px; color: #475569; margin-top: 4px;">सत्र: 2026 - 2027 | कक्षा: 12-B</div>
+            <div style="display: inline-block; background: #1E3A8A; color: white; padding: 3px 14px; border-radius: 12px; font-size: 11px; margin-top: 6px; font-weight: 600;">भाग 1 : व्यक्तिगत विवरण एवं स्व-मूल्यांकन</div>
         </div>
-        <div style="display: flex; gap: 15px; margin-bottom: 15px;">
-            <table style="width: 70%; border-collapse: collapse; font-size: 13px;">
-                <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold; width: 35%;">Student Name:</td><td style="padding: 6px; color: #1E3A8A; font-weight: bold;">{student_dict.get('student_name', '')} {hindi_name}</td></tr>
-                <tr><td style="padding: 6px; font-weight: bold;">Roll No:</td><td style="padding: 6px;">{student_dict.get('roll_no', '')}</td></tr>
-                <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">S.R. No:</td><td style="padding: 6px;">{student_dict.get('sr_no', '')}</td></tr>
-                <tr><td style="padding: 6px; font-weight: bold;">Father's Name:</td><td style="padding: 6px;">{student_dict.get('father_name', '')}</td></tr>
-                <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">Mother's Name:</td><td style="padding: 6px;">{student_dict.get('mother_name', '')}</td></tr>
-                <tr><td style="padding: 6px; font-weight: bold;">Date of Birth:</td><td style="padding: 6px;">{student_dict.get('dob', '')}</td></tr>
-                <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">PEN / Aadhar:</td><td style="padding: 6px;">{student_dict.get('pen_no', '')} / {student_dict.get('aadhar_no', '')}</td></tr>
-                <tr><td style="padding: 6px; font-weight: bold;">Contact / Email:</td><td style="padding: 6px;">{student_dict.get('mob_no', '')} | {student_dict.get('email_id', '')}</td></tr>
+
+        <div style="display: flex; gap: 15px; margin-bottom: 20px;">
+            <table style="width: 72%; border-collapse: collapse; font-size: 13px;">
+                <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold; width: 35%;">छात्र/छात्रा का नाम:</td><td style="padding: 6px; color: #1E3A8A; font-weight: bold; font-size: 14px;">{student.get('student_name')} {hindi_name}</td></tr>
+                <tr><td style="padding: 6px; font-weight: bold;">अनुक्रमांक (Roll No.):</td><td style="padding: 6px; font-weight: bold;">{student.get('roll_no')}</td></tr>
+                <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">S.R. No. / PEN:</td><td style="padding: 6px;">{student.get('sr_no')} / {student.get('pen_no')}</td></tr>
+                <tr><td style="padding: 6px; font-weight: bold;">पिता का नाम:</td><td style="padding: 6px;">{student.get('father_name')}</td></tr>
+                <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">माता का नाम:</td><td style="padding: 6px;">{student.get('mother_name')}</td></tr>
+                <tr><td style="padding: 6px; font-weight: bold;">जन्म तिथि (D.O.B.):</td><td style="padding: 6px;">{student.get('dob')}</td></tr>
+                <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold;">संपर्क सूत्र (Mobile):</td><td style="padding: 6px;">{student.get('mob_no')}</td></tr>
+                <tr><td style="padding: 6px; font-weight: bold;">निवास पता:</td><td style="padding: 6px;">{student.get('address')}</td></tr>
             </table>
-            <div style="width: 30%; border: 2px dashed #94A3B8; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #F8FAFC; padding: 8px; text-align: center;">
+            <div style="width: 28%; border: 2px dashed #94A3B8; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #F8FAFC; padding: 10px; text-align: center;">
                 {photo_html}
-                <div style="font-weight: bold; font-size: 13px; color: #1E3A8A; margin-top: 5px;">{student_dict.get('student_name', '')}</div>
-                <div style="font-size: 12px; color: #64748B;">Class 12-B (UP Board)</div>
-                <div style="font-size: 11px; color: #059669; margin-top: 4px; border: 1px solid #059669; padding: 2px 6px; border-radius: 10px;">Verified Student</div>
+                <div style="font-weight: bold; font-size: 13px; color: #1E3A8A; margin-top: 6px;">{student.get('student_name')}</div>
+                <div style="font-size: 11px; color: #64748B;">कक्षा: 12-B (विज्ञान/कला)</div>
+                <div style="font-size: 10px; color: #059669; margin-top: 4px; border: 1px solid #059669; padding: 2px 6px; border-radius: 8px;">सत्यापित विद्यार्थी</div>
             </div>
         </div>
-        <div style="margin-top: 10px;">
-            <div style="color: #1E3A8A; font-weight: bold; font-size: 14px; margin-bottom: 6px;">🎯 Academic Vision & Target Goals:</div>
-            <div style="background: #F8FAFC; border-left: 4px solid #3B82F6; padding: 8px 12px; border-radius: 4px; font-size: 13px; color: #334155;">{p_goals}</div>
+
+        <div style="margin-top: 15px;">
+            <div style="color: #1E3A8A; font-weight: bold; font-size: 14px; margin-bottom: 6px;">🎯 शैक्षणिक लक्ष्य एवं संकल्प (Academic Vision):</div>
+            <div style="background: #F8FAFC; border-left: 4px solid #3B82F6; padding: 10px 14px; border-radius: 4px; font-size: 13px; color: #334155; line-height: 1.5;">{goals}</div>
         </div>
-        <div style="margin-top: 10px;">
-            <div style="color: #1E3A8A; font-weight: bold; font-size: 14px; margin-bottom: 6px;">💡 Strengths & Growth Areas:</div>
-            <div style="background: #F8FAFC; border-left: 4px solid #10B981; padding: 8px 12px; border-radius: 4px; font-size: 13px; color: #334155;">{p_sw}</div>
+
+        <div style="margin-top: 15px;">
+            <div style="color: #1E3A8A; font-weight: bold; font-size: 14px; margin-bottom: 6px;">💡 क्षमताएं एवं सुधार क्षेत्र (Self-Reflection):</div>
+            <div style="background: #F8FAFC; border-left: 4px solid #10B981; padding: 10px 14px; border-radius: 4px; font-size: 13px; color: #334155; line-height: 1.5;">{sw}</div>
         </div>
     </div>
 
-    <!-- PAGE 2 -->
-    <div class="card-page">
-        <div style="text-align: center; border-bottom: 2px solid #E2E8F0; padding-bottom: 10px; margin-bottom: 15px;">
-            <h3 style="margin: 0; color: #1E3A8A; font-size: 18px; text-transform: uppercase;">LEARNING ARTIFACTS & EVALUATION RECORD</h3>
-            <div style="display: inline-block; background: #059669; color: white; padding: 3px 12px; border-radius: 12px; font-size: 11px; margin-top: 6px; font-weight: bold;">UP BOARD CONTINUOUS EVALUATION</div>
+    <!-- ================= PAGE 2 ================= -->
+    <div class="page">
+        <div style="text-align: center; border-bottom: 2px solid #E2E8F0; padding-bottom: 12px; margin-bottom: 15px;">
+            <h3 style="margin: 0; color: #1E3A8A; font-size: 19px; text-transform: uppercase;">सह-पाठ्यचर्या एवं गतिविधि मूल्यांकन प्रपत्र</h3>
+            <div style="display: inline-block; background: #059669; color: white; padding: 3px 14px; border-radius: 12px; font-size: 11px; margin-top: 6px; font-weight: 600;">भाग 2 : गतिविधि विवरण, छात्र चिंतन एवं रूब्रिक्स</div>
         </div>
+
         <div style="margin-bottom: 15px;">
-            <div style="color: #1E3A8A; font-weight: bold; font-size: 14px; margin-bottom: 8px;">📚 Key Academic & Practical Artifacts:</div>
-            {items_html}
+            <div style="color: #1E3A8A; font-weight: bold; font-size: 13px; margin-bottom: 8px;">📋 सत्र 2026-27 में संपादित प्रमुख गतिविधियां एवं प्रतियोगिताएं:</div>
+            <table style="width: 100%; border-collapse: collapse; font-size: 12px; border: 1px solid #CBD5E1;">
+                <thead>
+                    <tr style="background: #1E3A8A; color: white; text-align: left;">
+                        <th style="padding: 7px; width: 12%; text-align: center;">तिथि</th>
+                        <th style="padding: 7px; width: 38%;">गतिविधि / प्रतियोगिता का नाम</th>
+                        <th style="padding: 7px; width: 18%; text-align: center;">श्रेणी</th>
+                        <th style="padding: 7px; width: 22%;">विद्यार्थी की सीख / प्रस्तुति</th>
+                        <th style="padding: 7px; width: 10%; text-align: center;">अंक</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {activities_rows}
+                </tbody>
+            </table>
         </div>
-        <div style="border: 1px solid #CBD5E1; border-radius: 6px; padding: 12px; background: #F8FAFC; margin-top: 15px;">
-            <div style="margin: 0 0 8px 0; color: #1E3A8A; font-weight: bold; font-size: 13px;">📝 UP Board Portfolio Rubric Criteria (Max Marks: 20)</div>
+
+        <div style="border: 1px solid #CBD5E1; border-radius: 6px; padding: 12px; background: #F8FAFC; margin-top: 20px;">
+            <div style="margin: 0 0 8px 0; color: #1E3A8A; font-weight: bold; font-size: 13px;">📝 आंतरिक मूल्यांकन रूब्रिक्स (UP Board Marking Criteria - पूर्णांक: 20)</div>
             <div style="display: flex; gap: 8px; font-size: 12px; text-align: center;">
-                <div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>1. Regularity</strong><br>(5 M)</div>
-                <div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>2. Authenticity</strong><br>(5 M)</div>
-                <div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>3. Reflection</strong><br>(5 M)</div>
-                <div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>4. Creativity</strong><br>(5 M)</div>
+                <div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>1. नियमितता व सहभागिता</strong><br>(5 अंक)</div>
+                <div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>2. मौलिकता व शुद्धता</strong><br>(5 अंक)</div>
+                <div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>3. रचनात्मकता व कौशल</strong><br>(5 अंक)</div>
+                <div style="flex: 1; background: white; padding: 6px; border: 1px solid #CBD5E1; border-radius: 4px;"><strong>4. प्रस्तुतिकरण व आचरण</strong><br>(5 अंक)</div>
             </div>
-            <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 25px; padding-top: 10px; border-top: 1px dashed #94A3B8; font-size: 12px;">
+
+            <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 30px; padding-top: 10px; border-top: 1px dashed #94A3B8; font-size: 12px;">
                 <div>
-                    <div><strong>Student Signature:</strong> _____________________</div>
-                    <div style="color: #64748B; font-size: 11px; margin-top: 4px;">Date: {today_str}</div>
+                    <div><strong>विद्यार्थी के हस्ताक्षर:</strong> _____________________</div>
+                    <div style="color: #64748B; font-size: 11px; margin-top: 4px;">दिनांक: {today_str}</div>
                 </div>
                 <div style="text-align: right;">
-                    <div><strong>Teacher Signature:</strong> _____________________</div>
-                    <div style="color: #64748B; font-size: 11px; margin-top: 4px;">Class Teacher (12-B)</div>
+                    <div><strong>कक्षा अध्यापक / प्रभारी हस्ताक्षर:</strong> _____________________</div>
+                    <div style="color: #64748B; font-size: 11px; margin-top: 4px;">कक्षा अध्यापक (12-B)</div>
                 </div>
             </div>
         </div>
     </div>
-</div>
 </body>
-</html>
-"""
-    return full_html
+</html>"""
+    return html_content
 
-# --- Session State Management ---
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "user_roll" not in st.session_state:
-    st.session_state.user_roll = ""
+# ==========================================
+# TEACHER CENTRAL CONSOLE (NO LOGIN REQUIRED)
+# ==========================================
+st.title("🎓 UP Board Class 12-B Master Portfolio Portal")
+st.caption("कक्षा अध्यापक प्रबंधन कंसोल - 1-क्लिक पोर्टफोलियो जनरेटर एवं गूगल फॉर्म सिंक")
 
-def login_user(entered_user, entered_pass):
-    user_clean = " ".join(entered_user.strip().split())
-    pass_clean = entered_pass.strip()
-    pass_variants = [pass_clean, pass_clean + ".0", pass_clean.replace(".0", "")]
+tabs = st.tabs([
+    "🎴 Generate & Download Portfolio", 
+    "📥 Google Form Sync / Entry", 
+    "👥 Student Profiles & Photos", 
+    "📋 14 Official Activities Reference",
+    "🔄 Refresh & Manage Data"
+])
+
+conn = get_db_connection()
+
+# --- TAB 1: 2-PAGE PORTFOLIO DOWNLOAD ---
+with tabs[0]:
+    st.subheader("🎴 छात्र का 2-Page UP Board पोर्टफोलियो कार्ड देखें व डाउनलोड करें")
+    students_df = pd.read_sql_query("SELECT roll_no, student_name, student_name_hindi FROM students ORDER BY CAST(roll_no AS INTEGER) ASC", conn)
     
-    # Admin Login Check
-    if (user_clean.lower() == "admin" or user_clean.upper() == "ADMIN01") and pass_clean == "admin123":
-        return "ADMIN01"
-        
-    with engine.connect() as conn:
-        for p in set(pass_variants):
-            query = text("""
-                SELECT roll_no FROM students 
-                WHERE (LOWER(TRIM(student_name)) = LOWER(:u) OR LOWER(TRIM(username)) = LOWER(:u) OR roll_no = :u) 
-                AND (TRIM(password) = :p OR TRIM(sr_no) = :p)
-            """)
-            res = conn.execute(query, {"u": user_clean, "p": p}).fetchone()
-            if res:
-                return res[0]
-    return None
-
-def logout_user():
-    st.session_state.logged_in = False
-    st.session_state.user_roll = ""
-    st.rerun()
-
-# --- Login UI ---
-if not st.session_state.logged_in or not st.session_state.user_roll:
-    st.title("🎓 Class 12-B UP Board Continuous Portfolio Portal")
-    st.caption("माध्यमिक शिक्षा परिषद्, उत्तर प्रदेश - आंतरिक मूल्यांकन एवं पोर्टफोलियो प्रबंधन")
-    
-    col1, col2 = st.columns([1.2, 1])
-    with col1:
-        st.subheader("Login to Portfolio")
-        user_input = st.text_input("Login ID (Student Name / Admin Username)")
-        pass_input = st.text_input("Password (S.R. No. for Students)", type="password")
-        
-        if st.button("Login", type="primary", use_container_width=True):
-            ensure_database_populated()
-            valid_roll = login_user(user_input, pass_input)
-            if valid_roll:
-                st.session_state.logged_in = True
-                st.session_state.user_roll = valid_roll
-                st.rerun()
-            else:
-                st.error("Invalid Name or Password (S.R. No.)!")
-                
-    with col2:
-        st.info("""
-        **📌 Instructions for Students:**
-        - **Login ID:** Apna School Record wala Name enter karein.
-        - **Password:** Apna **S.R. Number** enter karein.
-        """)
-
-# --- Authenticated Interface ---
-else:
-    with engine.connect() as conn:
-        user_df = pd.read_sql_query(text("SELECT * FROM students WHERE roll_no=:r"), conn, params={"r": st.session_state.user_roll})
-    
-    if user_df.empty:
-        logout_user()
-
-    user_dict = user_df.iloc[0].to_dict()
-    role = user_dict.get("role", "Student")
-    student_roll = user_dict.get("roll_no", "")
-    student_sr = user_dict.get("sr_no", "")
-    student_name = user_dict.get("student_name", "")
-    student_photo = user_dict.get("photo_b64", "")
-    
-    with st.sidebar:
-        decoded_sidebar_photo = safe_b64_decode(student_photo)
-        if decoded_sidebar_photo:
-            st.image(decoded_sidebar_photo, width=100)
-        st.write(f"### 👋 **{student_name}**")
-        st.badge(f"Role: {role}")
-        if role == "Student":
-            st.write(f"**Roll No:** {student_roll}")
-            st.write(f"**S.R. No:** {student_sr}")
-        st.write("**Board:** UP BOARD")
-        st.write("**Class & Section:** 12-B")
-        st.divider()
-        if st.button("Logout", use_container_width=True):
-            logout_user()
-
-    # ==========================================
-    # 1. TEACHER / ADMIN DASHBOARD
-    # ==========================================
-    if role == "Teacher":
-        st.title("👨‍🏫 Teacher Evaluation Panel - Class 12-B (UP Board)")
-        
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "📑 Assessment & Grading", 
-            "🎴 View & Download Student Portfolios",
-            "👥 Class Master Records & Photo Upload", 
-            "🗑️ Manage & Delete Records",
-            "🔄 Excel File Status & Sync"
-        ])
-        
-        # TAB 1: Evaluation
-        with tab1:
-            st.subheader("Submitted Student Portfolios")
-            try:
-                with engine.connect() as conn:
-                    query = text("""
-                        SELECT p.id, s.roll_no, s.student_name, s.sr_no, p.portfolio_section, 
-                               p.category, p.title, p.description, p.learning_reflection, 
-                               p.project_link, p.total_marks, p.grade, p.feedback, p.submitted_on
-                        FROM portfolio p
-                        LEFT JOIN students s ON p.student_roll_no = s.roll_no
-                        ORDER BY p.id DESC
-                    """)
-                    df_port = pd.read_sql_query(query, conn)
-            except Exception:
-                df_port = pd.DataFrame()
-            
-            if df_port.empty:
-                st.info("Abhi tak kisi student ne submission nahi kiya hai.")
-            else:
-                st.dataframe(
-                    df_port[["roll_no", "student_name", "portfolio_section", "category", "title", "total_marks", "grade", "submitted_on"]],
-                    use_container_width=True
-                )
-                
-                st.divider()
-                st.subheader("🎯 Evaluate Artifact")
-                selected_pid = st.selectbox("Select Submission to Grade", df_port["id"].tolist())
-                sel_row = df_port[df_port["id"] == selected_pid].iloc[0]
-                
-                col_d1, col_d2 = st.columns(2)
-                with col_d1:
-                    st.markdown(f"**Student:** {sel_row['student_name']} (Roll: {sel_row['roll_no']})")
-                    st.markdown(f"**Section:** `{sel_row['portfolio_section']}`")
-                    st.markdown(f"**Category:** {sel_row['category']}")
-                    st.markdown(f"**Title:** **{sel_row['title']}**")
-                    st.markdown(f"**Description:** {sel_row['description']}")
-                with col_d2:
-                    st.markdown(f"**Student Reflection:**")
-                    st.info(sel_row['learning_reflection'] if sel_row['learning_reflection'] else "No self-reflection entered.")
-                    if sel_row['project_link']:
-                        st.markdown(f"🔗 **Attachment Link:** [{sel_row['project_link']}]({sel_row['project_link']})")
-                
-                st.markdown("##### 📝 UP Board Internal Assessment Rubric (0-5 per Criteria)")
-                c_r1, c_r2, c_r3, c_r4 = st.columns(4)
-                with c_r1:
-                    r_reg = st.slider("Regularity & Timeliness (0-5)", 0, 5, 4)
-                with c_r2:
-                    r_auth = st.slider("Quality & Authenticity (0-5)", 0, 5, 4)
-                with c_r3:
-                    r_refl = st.slider("Reflection & Learning (0-5)", 0, 5, 4)
-                with c_r4:
-                    r_creat = st.slider("Creativity & Presentation (0-5)", 0, 5, 4)
-                
-                total_calculated = r_reg + r_auth + r_refl + r_creat
-                final_grade_str = f"{total_calculated}/20"
-                new_feedback = st.text_input("Teacher's Feedback / Remarks", value=sel_row['feedback'])
-                
-                if st.button("Save Assessment", type="primary"):
-                    with engine.begin() as conn:
-                        conn.execute(text("""
-                            UPDATE portfolio 
-                            SET rubric_regularity=:r1, rubric_authenticity=:r2, rubric_reflection=:r3, 
-                                rubric_creativity=:r4, total_marks=:tot, grade=:grd, feedback=:fb
-                            WHERE id=:pid
-                        """), {
-                            "r1": r_reg, "r2": r_auth, "r3": r_refl, "r4": r_creat,
-                            "tot": total_calculated, "grd": final_grade_str, "fb": new_feedback, "pid": selected_pid
-                        })
-                    st.success("Marks & Rubric Saved Successfully!")
-                    st.rerun()
-
-        # TAB 2: Admin View & Download Student Portfolios
-        with tab2:
-            st.subheader("🎴 View & Download Individual Student Portfolio Cards")
-            with engine.connect() as conn:
-                all_stus = pd.read_sql_query(text("SELECT roll_no, student_name FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC"), conn)
-            
-            if all_stus.empty:
-                st.warning("Koi students available nahi hain.")
-            else:
-                target_stu_roll = st.selectbox(
-                    "Choose Student to View Card", 
-                    all_stus["roll_no"].tolist(),
-                    format_func=lambda x: f"Roll {x} - {all_stus[all_stus['roll_no']==x]['student_name'].values[0]}"
-                )
-                
-                with engine.connect() as conn:
-                    target_stu_data = pd.read_sql_query(text("SELECT * FROM students WHERE roll_no=:r"), conn, params={"r": target_stu_roll}).iloc[0].to_dict()
-                    target_stu_items = pd.read_sql_query(text("SELECT * FROM portfolio WHERE student_roll_no=:r ORDER BY id DESC"), conn, params={"r": target_stu_roll})
-                
-                generated_html = generate_portfolio_html(target_stu_data, target_stu_items)
-                
-                col_btn1, col_btn2 = st.columns([1, 2])
-                with col_btn1:
-                    st.download_button(
-                        label=f"📥 Download {target_stu_data.get('student_name')}'s Portfolio Card (.html)",
-                        data=generated_html,
-                        file_name=f"Portfolio_{target_stu_data.get('roll_no')}_{target_stu_data.get('student_name')}.html",
-                        mime="text/html",
-                        type="primary"
-                    )
-                with col_btn2:
-                    st.caption("Aap is file ko download karke offline kisi bhi browser mein open karke print/PDF bana sakte hain.")
-
-                st.divider()
-                st.components.v1.html(generated_html, height=1100, scrolling=True)
-
-        # TAB 3: Master Records & Photo Upload
-        with tab3:
-            st.subheader("Class 12-B Master Records & Photo Management")
-            with st.expander("📸 Upload / Update Student Photo (Teacher Panel)"):
-                with engine.connect() as conn:
-                    students_list = pd.read_sql_query(text("SELECT roll_no, student_name FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC"), conn)
-                
-                if not students_list.empty:
-                    chosen_roll = st.selectbox(
-                        "Select Student to Upload Photo", 
-                        students_list["roll_no"].tolist(),
-                        format_func=lambda x: f"Roll {x} - {students_list[students_list['roll_no']==x]['student_name'].values[0]}"
-                    )
-                    t_uploaded_img = st.file_uploader("Choose Student Passport Photo (JPG/PNG)", type=["jpg", "jpeg", "png"], key="teacher_photo_upload")
-                    if t_uploaded_img is not None:
-                        t_b64 = base64.b64encode(t_uploaded_img.read()).decode("utf-8")
-                        if st.button("Save Photo for Selected Student", type="primary"):
-                            with engine.begin() as conn:
-                                conn.execute(text("UPDATE students SET photo_b64=:p WHERE roll_no=:r"), {"p": t_b64, "r": chosen_roll})
-                            st.success("Photo uploaded successfully!")
-                            st.rerun()
-
-            try:
-                with engine.connect() as conn:
-                    students_df = pd.read_sql_query(text("""
-                        SELECT roll_no, sr_no, student_name, student_name_hindi, father_name, 
-                               dob, aadhar_no, pen_no, mob_no, email_id, 
-                               CASE WHEN photo_b64 != '' THEN 'Uploaded ✅' ELSE 'Pending ❌' END AS photo_status
-                        FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC
-                    """), conn)
-            except Exception:
-                students_df = pd.DataFrame()
-
-            st.write(f"Total Active Students in DB: **{len(students_df)}**")
-            st.dataframe(students_df, use_container_width=True)
-            if not students_df.empty:
-                st.download_button("📥 Export Clean Data (CSV)", students_df.to_csv(index=False).encode('utf-8'), "Class12B_Master.csv", "text/csv")
-
-        # TAB 4: Delete Data Management (Admin)
-        with tab4:
-            st.subheader("🗑️ Delete & Manage Records (Admin Controls)")
-            st.warning("⚠️ Dhyan dein: Yahan se data delete karne par permanently remove ho jayega.")
-            
-            c_del1, c_del2 = st.columns(2)
-            with c_del1:
-                st.markdown("#### 1. Delete Specific Submission Entry")
-                with engine.connect() as conn:
-                    del_items = pd.read_sql_query(text("SELECT id, student_roll_no, title, portfolio_section FROM portfolio ORDER BY id DESC"), conn)
-                
-                if not del_items.empty:
-                    sel_sub_del = st.selectbox(
-                        "Select Submission to Delete", 
-                        del_items["id"].tolist(),
-                        format_func=lambda x: f"ID {x}: Roll {del_items[del_items['id']==x]['student_roll_no'].values[0]} - {del_items[del_items['id']==x]['title'].values[0]}"
-                    )
-                    if st.button("Delete Selected Submission", type="secondary"):
-                        with engine.begin() as conn:
-                            conn.execute(text("DELETE FROM portfolio WHERE id=:pid"), {"pid": sel_sub_del})
-                        st.success("Submission successfully delete ho gaya!")
-                        st.rerun()
-                else:
-                    st.info("No submissions to delete.")
-
-            with c_del2:
-                st.markdown("#### 2. Delete Student Record")
-                with engine.connect() as conn:
-                    all_stu_del = pd.read_sql_query(text("SELECT roll_no, student_name FROM students WHERE role='Student' ORDER BY CAST(roll_no AS INTEGER) ASC"), conn)
-                
-                if not all_stu_del.empty:
-                    sel_user_del = st.selectbox(
-                        "Select Student to Remove", 
-                        all_stu_del["roll_no"].tolist(),
-                        format_func=lambda x: f"Roll {x} - {all_stu_del[all_stu_del['roll_no']==x]['student_name'].values[0]}",
-                        key="del_stu_box"
-                    )
-                    if st.button("Delete Student & All Submissions", type="secondary"):
-                        with engine.begin() as conn:
-                            conn.execute(text("DELETE FROM students WHERE roll_no=:r"), {"r": sel_user_del})
-                            conn.execute(text("DELETE FROM portfolio WHERE student_roll_no=:r"), {"r": sel_user_del})
-                        st.success("Student aur unke sabhi submissions permanently delete ho gaye!")
-                        st.rerun()
-                else:
-                    st.info("No students to delete.")
-
-        # TAB 5: Excel Status & Sync
-        with tab5:
-            st.subheader("Excel File Status & Force Sync")
-            excel_path = find_excel_file()
-            if excel_path:
-                st.success(f"✅ Excel file detected successfully at: `{excel_path}`")
-            else:
-                st.error("❌ 'studentport.xlsx' file detect nahi ho rahi hai.")
-                
-            if st.button("🔄 Force Re-Sync Data from Excel", type="primary"):
-                count, msg = sync_excel_data()
-                if count > 0:
-                    st.success(f"🎉 {count} students ka data database me successfully refresh ho gaya!")
-                    st.rerun()
-                else:
-                    st.error(msg)
-
-    # ==========================================
-    # 2. STUDENT DASHBOARD
-    # ==========================================
+    if students_df.empty:
+        st.warning("कोई छात्र रिकॉर्ड नहीं मिला। कृपया 'Refresh & Manage Data' टैब से studentport.xlsx सिंक करें।")
     else:
-        st.title(f"🎓 Student Portfolio - {student_name}")
-        st.caption(f"UP BOARD | S.R. No: {student_sr} | Roll No: {student_roll} | Class: 12-B")
-        
-        tab_s1, tab_s2, tab_s3, tab_s4, tab_s5, tab_s6 = st.tabs([
-            "🎴 2-Page Portfolio Card",
-            "🖼️ Upload / Change Photo",
-            "📂 My Submissions Record", 
-            "➕ Submit New Artifact / Work", 
-            "🎯 Profile & Goal Setting",
-            "👤 Official Details"
-        ])
-        
-        # --- TAB 1: 2-PAGE PORTFOLIO CARD ---
-        with tab_s1:
-            st.subheader("🎴 UP Board Official Student Portfolio Card (2-Page)")
-            st.caption("माध्यमिक शिक्षा परिषद्, उत्तर प्रदेश - सत्र: 2026-27")
+        col_s1, col_s2 = st.columns([1.5, 2])
+        with col_s1:
+            selected_roll = st.selectbox(
+                "विद्यार्थी चुनें (Roll No - Name):",
+                students_df["roll_no"].tolist(),
+                format_func=lambda x: f"Roll {x} : {students_df[students_df['roll_no']==x]['student_name'].values[0]}"
+            )
             
+            # Fetch details
+            c = conn.cursor()
+            c.execute("SELECT * FROM students WHERE roll_no=?", (selected_roll,))
+            stu_row = c.fetchone()
+            stu_cols = [desc[0] for desc in c.description]
+            student_dict = dict(zip(stu_cols, stu_row))
+            
+            entries_df = pd.read_sql_query("SELECT * FROM portfolio_entries WHERE roll_no=? ORDER BY id DESC", conn, params=(selected_roll,))
+            portfolio_html = generate_upboard_card(student_dict, entries_df)
+            
+            st.download_button(
+                label=f"📥 Download {student_dict.get('student_name')} Portfolio Card (.html)",
+                data=portfolio_html,
+                file_name=f"UPBoard_12B_Roll_{student_dict.get('roll_no')}_{student_dict.get('student_name')}.html",
+                mime="text/html",
+                type="primary",
+                use_container_width=True
+            )
+            st.caption("💡 डाउनलोड की गई HTML फ़ाइल को किसी भी फ़ोन या कंप्यूटर में खोलकर सीधे 'Print' या 'Save as PDF' कर सकते हैं।")
+
+        with col_s2:
+            st.info(f"**चयनित विद्यार्थी:** {student_dict.get('student_name')} | **पिता:** {student_dict.get('father_name')} | **S.R. No:** {student_dict.get('sr_no')}")
+
+        st.divider()
+        st.components.v1.html(portfolio_html, height=1150, scrolling=True)
+
+# --- TAB 2: GOOGLE FORM DATA SYNC / MANUAL INPUT ---
+with tabs[1]:
+    st.subheader("📥 Google Form डेटा सिंक (Response Sheet)")
+    st.write("बच्चे Google Form भरकर जो Google Sheet बनाएंगे, उसे CSV/Excel रूप में डाउनलोड करके यहाँ 1-क्लिक में सिंक करें:")
+
+    col_up1, col_up2 = st.columns(2)
+    with col_up1:
+        uploaded_form = st.file_uploader("Google Form Responses File (.xlsx / .csv)", type=["xlsx", "csv"])
+        if uploaded_form is not None:
             try:
-                with engine.connect() as conn:
-                    card_items = pd.read_sql_query(
-                        text("SELECT * FROM portfolio WHERE student_roll_no=:r ORDER BY id DESC"),
-                        conn, params={"r": student_roll}
-                    )
-            except Exception:
-                card_items = pd.DataFrame()
-            
-            student_full_html = generate_portfolio_html(user_dict, card_items)
-            
-            col_d1, col_d2 = st.columns([1, 2])
-            with col_d1:
-                st.download_button(
-                    label="📥 Download My Portfolio Card (.html)",
-                    data=student_full_html,
-                    file_name=f"Portfolio_{student_roll}_{student_name}.html",
-                    mime="text/html",
-                    type="primary"
-                )
-            with col_d2:
-                st.caption("Aap is file ko direct download karke kisi bhi phone ya computer me offline dekh aur print kar sakte hain.")
-
-            st.divider()
-            st.components.v1.html(student_full_html, height=1100, scrolling=True)
-
-        # --- TAB 2: UPLOAD PHOTO ---
-        with tab_s2:
-            st.subheader("🖼️ Upload Passport Size Photo")
-            st.caption("Aapki photo portfolio card ke Page 1 par display hogi.")
-            
-            c_ph1, c_ph2 = st.columns([1, 2])
-            with c_ph1:
-                decoded_img = safe_b64_decode(student_photo)
-                if decoded_img:
-                    st.image(decoded_img, caption="Current Photo", width=140)
+                if uploaded_form.name.endswith('.csv'):
+                    df_form = pd.read_csv(uploaded_form, dtype=str)
                 else:
-                    st.info("No photo uploaded yet.")
+                    df_form = pd.read_excel(uploaded_form, dtype=str)
                     
-            with c_ph2:
-                uploaded_img = st.file_uploader("Choose Photo (JPG, JPEG, PNG)", type=["jpg", "jpeg", "png"])
-                if uploaded_img is not None:
-                    img_bytes = uploaded_img.read()
-                    encoded_str = base64.b64encode(img_bytes).decode("utf-8")
-                    if st.button("Save & Upload Photo", type="primary"):
-                        with engine.begin() as conn:
-                            conn.execute(text("UPDATE students SET photo_b64=:p WHERE roll_no=:r"), {"p": encoded_str, "r": student_roll})
-                        st.success("Photo successfully upload ho gayi!")
-                        st.rerun()
+                st.write("Uploaded Responses Preview:", df_form.head(3))
+                if st.button("Sync Responses to Portfolios", type="primary"):
+                    c = conn.cursor()
+                    success_add = 0
+                    for _, r in df_form.iterrows():
+                        # Robust field mapping
+                        r_no = clean_val(r.get("Roll No", r.get("ROLL NO", r.get("Roll Number", ""))))
+                        act_name = clean_val(r.get("Activity Name", r.get("गतिविधि का नाम", r.get("प्रतियोगिता", ""))))
+                        desc = clean_val(r.get("Description", r.get("विवरण", "")))
+                        refl = clean_val(r.get("Reflection", r.get("सीख", r.get("विद्यार्थी चिंतन", ""))))
+                        link = clean_val(r.get("Link", r.get("फोटो लिंक", "")))
+                        
+                        if r_no and act_name:
+                            today_now = datetime.now().strftime("%d.%m.%Y")
+                            c.execute("""
+                                INSERT INTO portfolio_entries (roll_no, activity_name, category, activity_date, student_description, student_reflection, evidence_link, submitted_on)
+                                VALUES (?, ?, 'सह-पाठ्यचर्या', ?, ?, ?, ?, ?)
+                            """, (r_no, act_name, today_now, desc, refl, link, today_now))
+                            success_add += 1
+                    conn.commit()
+                    st.success(f"{success_add} Google Form प्रविष्टियाँ पोर्टफोलियो में सफलतापूर्वक सिंक हो गईं!")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error reading form file: {e}")
 
-        # --- TAB 3: SUBMISSIONS RECORD ---
-        with tab_s3:
-            st.subheader("My Portfolio Records")
-            try:
-                with engine.connect() as conn:
-                    my_port = pd.read_sql_query(
-                        text("SELECT * FROM portfolio WHERE student_roll_no=:r ORDER BY id DESC"),
-                        conn, params={"r": student_roll}
-                    )
-            except Exception:
-                my_port = pd.DataFrame()
+    with col_up2:
+        st.write("#### या सीधे यहाँ से किसी छात्र की गतिविधि दर्ज करें:")
+        with st.form("manual_entry_form"):
+            m_roll = st.selectbox("विद्यार्थी (Roll No):", students_df["roll_no"].tolist() if not students_df.empty else [])
+            m_act = st.selectbox("14 आधिकारिक गतिविधियों में से चुनें:", [a["name"] for a in DEFAULT_ACTIVITIES])
+            m_desc = st.text_area("विवरण / कार्य:", placeholder="छात्र द्वारा किया गया कार्य...")
+            m_refl = st.text_area("विद्यार्थी का चिंतन (सीख):", placeholder="इस गतिविधि से क्या सीखा...")
+            m_marks = st.slider("अंक (Rubric Marks 1-5):", 1, 5, 5)
             
-            if my_port.empty:
-                st.info("Aapka portfolio abhi khali hai. Naya kaam submit karne ke liye 'Submit New Artifact' tab par jayein.")
-            else:
-                for _, row in my_port.iterrows():
-                    with st.expander(f"📌 [{row['portfolio_section']}] {row['title']} - Score: {row['grade']}"):
-                        c_sub1, c_sub2 = st.columns(2)
-                        with c_sub1:
-                            st.write(f"**Category:** {row['category']}")
-                            st.write(f"**Submitted On:** {row['submitted_on']}")
-                            st.write(f"**Description:** {row['description']}")
-                            if row['project_link']:
-                                st.write(f"🔗 **Link:** [{row['project_link']}]({row['project_link']})")
-                        with c_sub2:
-                            st.write(f"**My Self-Reflection:** {row['learning_reflection']}")
-                            st.divider()
-                            st.write(f"👨‍🏫 **Teacher Feedback:** {row['feedback']}")
-                            if row.get('total_marks', 0) > 0:
-                                st.write(f"**Rubric Breakdown:** Regularity: {row['rubric_regularity']}/5 | Authenticity: {row['rubric_authenticity']}/5 | Reflection: {row['rubric_reflection']}/5 | Creativity: {row['rubric_creativity']}/5")
+            if st.form_submit_button("पोर्टफोलियो में जोड़ें"):
+                c = conn.cursor()
+                # Find matching default activity for date & category
+                act_info = next((item for item in DEFAULT_ACTIVITIES if item["name"] == m_act), None)
+                act_date = act_info["date"] if act_info else datetime.now().strftime("%d.%m.%Y")
+                act_cat = act_info["cat"] if act_info else "सह-पाठ्यचर्या"
+                
+                c.execute("""
+                    INSERT INTO portfolio_entries (roll_no, activity_name, category, activity_date, student_description, student_reflection, marks_awarded, submitted_on)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (m_roll, m_act, act_cat, act_date, m_desc, m_refl, m_marks, datetime.now().strftime("%d-%m-%Y")))
+                conn.commit()
+                st.success("गतिविधि छात्र पोर्टफोलियो में जुड़ गई!")
+                st.rerun()
 
-        # --- TAB 4: SUBMIT ARTIFACT ---
-        with tab_s4:
-            st.subheader("Add Work to Portfolio")
-            with st.form("upboard_submission_form"):
-                section = st.selectbox("1. Select Portfolio Pillar*", [
-                    "2. Academic Artifacts (Best CW/HW, Unit Tests, Error Analysis)",
-                    "3. Projects & Practical Work (Lab Experiments, Working Models, Surveys)",
-                    "4. Creative & Co-Curricular (Art Integration, Creative Writing, Certificates)",
-                    "5. Self & Peer Assessment (Reflections & Group Feedback)"
-                ])
-                
-                if "Academic" in section:
-                    cat_options = ["Best Classwork / Notes Sample", "Unit Test Paper with Correction", "Error Analysis & Learning Sheet", "Assignment / Worksheet"]
-                elif "Projects" in section:
-                    cat_options = ["Physics / Science Lab Practical Record", "Working Model / STEM Design", "Computer Science / Coding Project", "Survey / Case Study Report"]
-                elif "Creative" in section:
-                    cat_options = ["Art Integration (Poster / Mind Map / Chart)", "Self-Written Essay / Poem / Article", "Competition Certificate / Award", "Exhibition Display"]
-                else:
-                    cat_options = ["Term Self-Assessment Reflection", "Peer Review / Group Activity Feedback"]
-                    
-                sub_category = st.selectbox("2. Artifact Category*", cat_options)
-                title = st.text_input("3. Title of Work / Topic*")
-                description = st.text_area("4. Summary of the Activity")
-                reflection = st.text_area("5. Student Reflection (Maine isse kya seekha? / What I learned & challenges faced)")
-                link = st.text_input("6. Google Drive / Photo / GitHub Link")
-                
-                if st.form_submit_button("Submit to Portfolio", type="primary"):
-                    if title:
-                        now_str = datetime.now().strftime("%d-%b-%Y %I:%M %p")
-                        with engine.begin() as conn:
-                            conn.execute(text("""
-                                INSERT INTO portfolio (
-                                    student_roll_no, portfolio_section, category, title, 
-                                    description, learning_reflection, project_link, submitted_on
-                            ) VALUES (:r, :sec, :cat, :tit, :desc, :refl, :lnk, :sub_on)
-                            """), {
-                                "r": student_roll, "sec": section.split('.')[1].strip(),
-                                "cat": sub_category, "tit": title, "desc": description,
-                                "refl": reflection, "lnk": link, "sub_on": now_str
-                            })
-                        st.success("Artifact successfully submitted!")
-                        st.rerun()
-                    else:
-                        st.error("Title is required!")
-
-        # --- TAB 5: PROFILE GOALS ---
-        with tab_s5:
-            st.subheader("🎯 Academic Goals & Self Profile")
-            curr_goals = user_dict.get("academic_goals", "")
-            curr_sw = user_dict.get("strengths_weaknesses", "")
-            
-            with st.form("goals_form"):
-                goals = st.text_area("My Goals for Session 2026-27:", value=curr_goals if curr_goals else "")
-                sw = st.text_area("My Strengths & Areas to Improve:", value=curr_sw if curr_sw else "")
-                
-                if st.form_submit_button("Save Goals"):
-                    with engine.begin() as conn:
-                        conn.execute(text("UPDATE students SET academic_goals=:g, strengths_weaknesses=:sw WHERE roll_no=:r"), {
-                            "g": goals, "sw": sw, "r": student_roll
-                        })
-                    st.success("Goals updated!")
+# --- TAB 3: PROFILES & PHOTO UPLOAD ---
+with tabs[2]:
+    st.subheader("👥 छात्र मास्टर प्रोफाइल एवं फोटो अपलोड")
+    if not students_df.empty:
+        col_ph1, col_ph2 = st.columns([1.5, 2])
+        with col_ph1:
+            sel_photo_roll = st.selectbox("फोटो हेतु छात्र चुनें:", students_df["roll_no"].tolist(), key="photo_sel")
+            photo_file = st.file_uploader("पासपोर्ट साइज फोटो (JPG/PNG)", type=["jpg", "jpeg", "png"])
+            if photo_file is not None:
+                encoded = base64.b64encode(photo_file.read()).decode("utf-8")
+                if st.button("Save Photo to Student Profile", type="primary"):
+                    c = conn.cursor()
+                    c.execute("UPDATE students SET photo_b64=? WHERE roll_no=?", (encoded, sel_photo_roll))
+                    conn.commit()
+                    st.success(f"Roll {sel_photo_roll} की फोटो सुरक्षित हो गई!")
                     st.rerun()
 
-        # --- TAB 6: OFFICIAL DETAILS ---
-        with tab_s6:
-            st.subheader("Official Details (School Record)")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.write(f"**Roll No:** {user_dict.get('roll_no', '')}")
-                st.write(f"**S.R. No:** {user_dict.get('sr_no', '')}")
-                st.write(f"**Name (English):** {user_dict.get('student_name', '')}")
-                st.write(f"**Name (Hindi):** {user_dict.get('student_name_hindi', '')}")
-                st.write(f"**Father's Name:** {user_dict.get('father_name', '')}")
-                st.write(f"**Mother's Name:** {user_dict.get('mother_name', '')}")
-                st.write(f"**D.O.B:** {user_dict.get('dob', '')}")
-            with c2:
-                st.write(f"**Aadhar No:** {user_dict.get('aadhar_no', '')}")
-                st.write(f"**PEN No:** {user_dict.get('pen_no', '')}")
-                st.write(f"**Mobile:** {user_dict.get('mob_no', '')}")
-                st.write(f"**Email:** {user_dict.get('email_id', '')}")
-                st.write(f"**Address:** {user_dict.get('address', '')}")
+        with col_ph2:
+            all_records = pd.read_sql_query("""
+                SELECT roll_no, student_name, father_name, sr_no, mob_no,
+                       CASE WHEN photo_b64 != '' THEN 'Uploaded ✅' ELSE 'Pending ❌' END AS Photo
+                FROM students ORDER BY CAST(roll_no AS INTEGER) ASC
+            """, conn)
+            st.dataframe(all_records, use_container_width=True)
+
+# --- TAB 4: 14 OFFICIAL ACTIVITIES CALENDAR ---
+with tabs[3]:
+    st.subheader("📋 कक्षा 12-B आधिकारिक गतिविधि एवं प्रतियोगिता कैलेंडर (UP Board 2026-27)")
+    df_acts = pd.DataFrame(DEFAULT_ACTIVITIES)
+    df_acts.columns = ["क्र. सं.", "तिथि", "प्रतियोगिता / गतिविधि का नाम", "श्रेणी / प्रकार", "विषय / विवरण", "प्रभारी / मूल्यांकनकर्ता"]
+    st.dataframe(df_acts, use_container_width=True)
+
+# --- TAB 5: REFRESH & DELETE MANAGEMENT ---
+with tabs[4]:
+    st.subheader("🔄 डेटा सिंक एवं डिलीट नियंत्रण")
+    col_mg1, col_mg2 = st.columns(2)
+    with col_mg1:
+        st.write("#### 1. studentport.xlsx से सिंक")
+        if st.button("🔄 studentport.xlsx से री-सिंक करें", type="primary"):
+            c_done, msg = sync_students_excel()
+            st.success(f"{c_done} विद्यार्थियों का प्रोफाइल डेटा सफलतापूर्वक री-सिंक हो गया!")
+            st.rerun()
+
+    with col_mg2:
+        st.write("#### 2. गलत गतिविधि एंट्री डिलीट करें")
+        all_entries = pd.read_sql_query("SELECT id, roll_no, activity_name, activity_date FROM portfolio_entries ORDER BY id DESC", conn)
+        if not all_entries.empty:
+            del_id = st.selectbox("हटाने हेतु एंट्री चुनें:", all_entries["id"].tolist(), format_func=lambda x: f"ID {x} : Roll {all_entries[all_entries['id']==x]['roll_no'].values[0]} - {all_entries[all_entries['id']==x]['activity_name'].values[0]}")
+            if st.button("Delete Entry", type="secondary"):
+                c = conn.cursor()
+                c.execute("DELETE FROM portfolio_entries WHERE id=?", (del_id,))
+                conn.commit()
+                st.success("एंट्री डिलीट हो गई!")
+                st.rerun()
+        else:
+            st.info("डिलीट करने के लिए कोई अलग एंट्री नहीं है।")
+
+conn.close()
