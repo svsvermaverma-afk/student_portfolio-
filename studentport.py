@@ -144,7 +144,7 @@ def find_excel_file():
     return None
 
 
-# Sync Students Profile from Excel
+# Non-destructive Sync Students Profile from Excel
 def sync_students_excel():
     target_file = find_excel_file()
     if not target_file:
@@ -154,12 +154,6 @@ def sync_students_excel():
         conn = get_db_connection()
         c = conn.cursor()
 
-        # Preserve existing photos & goals
-        c.execute("SELECT roll_no, photo_b64, academic_goals, strengths_weaknesses, short_term_goal, long_term_goal FROM students")
-        existing_meta = {row[0]: (row[1], row[2], row[3], row[4], row[5]) for row in c.fetchall()}
-
-        c.execute("DELETE FROM students")
-
         count = 0
         for _, row in df_excel.iterrows():
             r_no = clean_val(row.get("ROLL NO.", ""))
@@ -167,17 +161,32 @@ def sync_students_excel():
             if not r_no or not s_name or r_no == "0" or s_name.lower() in ["nan", "nat"]:
                 continue
 
-            saved_photo, saved_goals, saved_sw, saved_st, saved_lt = existing_meta.get(r_no, ("", "", "", "", ""))
             dob_val = clean_val(row.get("D.O.B.", "")).replace("00:00:00", "").strip()
 
+            # Insert if not exists, or update basic demographic info WITHOUT overwriting photos or goals
             c.execute("""
-                INSERT OR REPLACE INTO students (
+                INSERT INTO students (
                     roll_no, student_name, student_name_hindi, sr_no, roll_no_10th, 
                     pen_no, dob, father_name, father_name_hindi, 
                     mother_name, mother_name_hindi, gender, category, 
-                    mob_no, email_id, address, academic_goals, strengths_weaknesses, 
-                    short_term_goal, long_term_goal, photo_b64
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    mob_no, email_id, address
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(roll_no) DO UPDATE SET
+                    student_name=excluded.student_name,
+                    student_name_hindi=COALESCE(NULLIF(excluded.student_name_hindi, ''), students.student_name_hindi),
+                    sr_no=COALESCE(NULLIF(excluded.sr_no, ''), students.sr_no),
+                    roll_no_10th=COALESCE(NULLIF(excluded.roll_no_10th, ''), students.roll_no_10th),
+                    pen_no=COALESCE(NULLIF(excluded.pen_no, ''), students.pen_no),
+                    dob=COALESCE(NULLIF(excluded.dob, ''), students.dob),
+                    father_name=COALESCE(NULLIF(excluded.father_name, ''), students.father_name),
+                    father_name_hindi=COALESCE(NULLIF(excluded.father_name_hindi, ''), students.father_name_hindi),
+                    mother_name=COALESCE(NULLIF(excluded.mother_name, ''), students.mother_name),
+                    mother_name_hindi=COALESCE(NULLIF(excluded.mother_name_hindi, ''), students.mother_name_hindi),
+                    gender=COALESCE(NULLIF(excluded.gender, ''), students.gender),
+                    category=COALESCE(NULLIF(excluded.category, ''), students.category),
+                    mob_no=COALESCE(NULLIF(excluded.mob_no, ''), students.mob_no),
+                    email_id=COALESCE(NULLIF(excluded.email_id, ''), students.email_id),
+                    address=COALESCE(NULLIF(excluded.address, ''), students.address)
             """, (
                 r_no, s_name, clean_val(row.get("STUDENT NAME IN HINDI", "")),
                 clean_val(row.get("S.R. NO.", "")),
@@ -192,8 +201,7 @@ def sync_students_excel():
                 clean_val(row.get("CAT.", "")),
                 clean_val(row.get("MOB. NO.", "")),
                 clean_val(row.get("EMAIL ID", "")),
-                clean_val(row.get("ADDRESS", "")),
-                saved_goals, saved_sw, saved_st, saved_lt, saved_photo
+                clean_val(row.get("ADDRESS", ""))
             ))
             count += 1
 
@@ -206,7 +214,7 @@ def sync_students_excel():
 
 init_db()
 
-# Auto sync on load if database is empty
+# Safe initial sync: populate if empty
 conn = get_db_connection()
 c = conn.cursor()
 c.execute("SELECT COUNT(*) FROM students")
@@ -254,7 +262,6 @@ def generate_upboard_card(student, entries_df):
     today_str = datetime.now().strftime('%d-%m-%Y')
     hindi_name = f"({student.get('student_name_hindi')})" if student.get('student_name_hindi') else ""
 
-    # Academic Vision Display (Short-Term & Long-Term)
     short_term = student.get('short_term_goal', '').strip()
     long_term = student.get('long_term_goal', '').strip()
     general_goals = student.get('academic_goals', '').strip()
@@ -389,7 +396,7 @@ def generate_upboard_card(student, entries_df):
 
 
 # ==========================================
-# TEACHER CENTRAL CONSOLE (NO LOGIN REQUIRED)
+# TEACHER CENTRAL CONSOLE
 # ==========================================
 st.title("🎓 UP Board Class 12-B Master Portfolio Portal")
 st.caption("कक्षा अध्यापक प्रबंधन कंसोल - 1-क्लिक पोर्टफोलियो जनरेटर एवं गूगल फॉर्म सिंक")
@@ -446,7 +453,6 @@ with tabs[0]:
             st.info(
                 f"**चयनित विद्यार्थी:** {student_dict.get('student_name')} | **पिता:** {student_dict.get('father_name')} | **S.R. No:** {student_dict.get('sr_no')}")
             
-            # Show Academic Vision if available
             st_g = student_dict.get('short_term_goal')
             lt_g = student_dict.get('long_term_goal')
             if st_g or lt_g:
@@ -498,7 +504,7 @@ with tabs[1]:
                             if not r_no:
                                 continue
 
-                            # 1. Update Short-Term and Long-Term Goals
+                            # 1. Update Goals only when not empty
                             st_val = clean_val(r.get(st_col, "")) if st_col else ""
                             lt_val = clean_val(r.get(lt_col, "")) if lt_col else ""
 
@@ -507,12 +513,12 @@ with tabs[1]:
                                     UPDATE students 
                                     SET short_term_goal = CASE WHEN ? != '' THEN ? ELSE short_term_goal END,
                                         long_term_goal = CASE WHEN ? != '' THEN ? ELSE long_term_goal END,
-                                        academic_goals = CASE WHEN ? != '' THEN ? ELSE academic_goals END
+                                        academic_goals = CASE WHEN (? != '' OR ? != '') THEN ? ELSE academic_goals END
                                     WHERE roll_no = ?
                                 """, (
                                     st_val, st_val,
                                     lt_val, lt_val,
-                                    f"अल्पकालिक: {st_val} | दीर्घकालिक: {lt_val}".strip(" |"),
+                                    st_val, lt_val,
                                     f"अल्पकालिक: {st_val} | दीर्घकालिक: {lt_val}".strip(" |"),
                                     r_no
                                 ))
@@ -523,7 +529,6 @@ with tabs[1]:
                                 act_num = str(act["sno"])
                                 act_name = act["name"]
 
-                                # Match specific column headers based on Apps Script template
                                 desc_col = next((c_name for c_name in cols if f"[{act_num}." in c_name and ("description" in c_name.lower() or "कार्य किया" in c_name)), None)
                                 refl_col = next((c_name for c_name in cols if f"[{act_num}." in c_name and ("reflection" in c_name.lower() or "सीखा" in c_name)), None)
                                 link_col = next((c_name for c_name in cols if f"[{act_num}." in c_name and ("link" in c_name.lower() or "photo" in c_name.lower() or "drive" in c_name.lower())), None)
@@ -532,7 +537,6 @@ with tabs[1]:
                                 refl_val = clean_val(r.get(refl_col, "")) if refl_col else ""
                                 link_val = clean_val(r.get(link_col, "")) if link_col else ""
 
-                                # If student entered something for this activity, insert or update
                                 if desc_val or refl_val or link_val:
                                     today_now = datetime.now().strftime("%d-%m-%Y")
                                     c.execute("""
@@ -548,7 +552,7 @@ with tabs[1]:
                                     activities_synced += 1
 
                         conn.commit()
-                        st.success(f"🎉 सफलता! {goals_synced} छात्रों के शैक्षणिक लक्ष्य (Goals) और {activities_synced} गतिविधि प्रविष्टियाँ सफलतापूर्वक सिंक हो गईं!")
+                        st.success(f"🎉 सफलता! {goals_synced} छात्रों के लक्ष्य (Goals) और {activities_synced} गतिविधियाँ सुरक्षित हो गईं!")
                         st.rerun()
 
             except Exception as e:
@@ -568,9 +572,11 @@ with tabs[1]:
                 combined_goal = f"अल्पकालिक: {m_st_goal} | दीर्घकालिक: {m_lt_goal}".strip(" |")
                 c.execute("""
                     UPDATE students 
-                    SET short_term_goal = ?, long_term_goal = ?, academic_goals = ?
+                    SET short_term_goal = CASE WHEN ? != '' THEN ? ELSE short_term_goal END,
+                        long_term_goal = CASE WHEN ? != '' THEN ? ELSE long_term_goal END,
+                        academic_goals = CASE WHEN ? != '' THEN ? ELSE academic_goals END
                     WHERE roll_no = ?
-                """, (m_st_goal, m_lt_goal, combined_goal, m_roll_goal))
+                """, (m_st_goal, m_st_goal, m_lt_goal, m_lt_goal, combined_goal, combined_goal, m_roll_goal))
                 conn.commit()
                 st.success("शैक्षणिक लक्ष्य सुरक्षित हो गए!")
                 st.rerun()
@@ -589,7 +595,7 @@ with tabs[2]:
                     c = conn.cursor()
                     c.execute("UPDATE students SET photo_b64=? WHERE roll_no=?", (encoded, sel_photo_roll))
                     conn.commit()
-                    st.success(f"Roll {sel_photo_roll} की फोटो सुरक्षित हो गई!")
+                    st.success(f"Roll {sel_photo_roll} की फोटो स्थायी रूप से सुरक्षित हो गई!")
                     st.rerun()
 
         with col_ph2:
@@ -612,17 +618,18 @@ with tabs[3]:
 
 # --- TAB 5: REFRESH & DELETE MANAGEMENT ---
 with tabs[4]:
-    st.subheader("🔄 डेटा सिंक एवं डिलीट नियंत्रण")
+    st.subheader("🔄 डेटा सिंक एवं नियंत्रण")
     col_mg1, col_mg2 = st.columns(2)
     with col_mg1:
-        st.write("#### 1. studentport.xlsx से सिंक")
-        if st.button("🔄 studentport.xlsx से री-सिंक करें", type="primary"):
+        st.write("#### 1. studentport.xlsx से सुरक्षित सिंक")
+        st.caption("नोट: इससे छात्रों की फोटो या लक्ष्य डिलीट नहीं होंगे।")
+        if st.button("🔄 studentport.xlsx सिंक करें", type="primary"):
             c_done, msg = sync_students_excel()
-            st.success(f"{c_done} विद्यार्थियों का प्रोफाइल डेटा सफलतापूर्वक री-सिंक हो गया!")
+            st.success(f"{c_done} विद्यार्थियों का प्रोफाइल डेटा सुरक्षित रूप से सिंक हो गया!")
             st.rerun()
 
     with col_mg2:
-        st.write("#### 2. प्रविष्टि डिलीट करें")
+        st.write("#### 2. गलत गतिविधि प्रविष्टि हटाएं")
         all_entries = pd.read_sql_query(
             "SELECT id, roll_no, activity_name, activity_date FROM portfolio_entries ORDER BY id DESC", conn)
         if not all_entries.empty:
