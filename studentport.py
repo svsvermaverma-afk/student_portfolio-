@@ -36,7 +36,7 @@ def get_db_connection():
     return sqlite3.connect("class12b_portfolio.db", check_same_thread=False)
 
 
-# Pre-defined 14 Official School Activities (UP Board Co-Curricular & Academic Calendar)
+# Pre-defined 14 Official School Activities (UP Board Calendar 2026-27)
 DEFAULT_ACTIVITIES = [
     {"sno": 1, "date": "27.08.2026", "name": "Tata Building India School Essay Competition", "cat": "साहित्यिक (निबंध)",
      "desc": "2047 तक भारत को विश्व का सबसे विकसित देश बनाने के लिए मैं यह पांच कार्य करूंगा/करूंगी",
@@ -98,11 +98,21 @@ def init_db():
             mob_no TEXT,
             email_id TEXT,
             address TEXT,
+            short_term_goal TEXT DEFAULT '',
+            long_term_goal TEXT DEFAULT '',
             academic_goals TEXT DEFAULT '',
             strengths_weaknesses TEXT DEFAULT '',
             photo_b64 TEXT DEFAULT ''
         )
     ''')
+
+    # Migration check for existing databases
+    c.execute("PRAGMA table_info(students)")
+    cols = [info[1] for info in c.fetchall()]
+    if "short_term_goal" not in cols:
+        c.execute("ALTER TABLE students ADD COLUMN short_term_goal TEXT DEFAULT ''")
+    if "long_term_goal" not in cols:
+        c.execute("ALTER TABLE students ADD COLUMN long_term_goal TEXT DEFAULT ''")
 
     # Submissions / Form Responses Table
     c.execute('''
@@ -144,9 +154,9 @@ def sync_students_excel():
         conn = get_db_connection()
         c = conn.cursor()
 
-        # Keep existing photos & goals
-        c.execute("SELECT roll_no, photo_b64, academic_goals, strengths_weaknesses FROM students")
-        existing_meta = {row[0]: (row[1], row[2], row[3]) for row in c.fetchall()}
+        # Preserve existing photos & goals
+        c.execute("SELECT roll_no, photo_b64, academic_goals, strengths_weaknesses, short_term_goal, long_term_goal FROM students")
+        existing_meta = {row[0]: (row[1], row[2], row[3], row[4], row[5]) for row in c.fetchall()}
 
         c.execute("DELETE FROM students")
 
@@ -157,7 +167,7 @@ def sync_students_excel():
             if not r_no or not s_name or r_no == "0" or s_name.lower() in ["nan", "nat"]:
                 continue
 
-            saved_photo, saved_goals, saved_sw = existing_meta.get(r_no, ("", "", ""))
+            saved_photo, saved_goals, saved_sw, saved_st, saved_lt = existing_meta.get(r_no, ("", "", "", "", ""))
             dob_val = clean_val(row.get("D.O.B.", "")).replace("00:00:00", "").strip()
 
             c.execute("""
@@ -165,8 +175,9 @@ def sync_students_excel():
                     roll_no, student_name, student_name_hindi, sr_no, roll_no_10th, 
                     pen_no, dob, father_name, father_name_hindi, 
                     mother_name, mother_name_hindi, gender, category, 
-                    mob_no, email_id, address, academic_goals, strengths_weaknesses, photo_b64
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    mob_no, email_id, address, academic_goals, strengths_weaknesses, 
+                    short_term_goal, long_term_goal, photo_b64
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 r_no, s_name, clean_val(row.get("STUDENT NAME IN HINDI", "")),
                 clean_val(row.get("S.R. NO.", "")),
@@ -182,7 +193,7 @@ def sync_students_excel():
                 clean_val(row.get("MOB. NO.", "")),
                 clean_val(row.get("EMAIL ID", "")),
                 clean_val(row.get("ADDRESS", "")),
-                saved_goals, saved_sw, saved_photo
+                saved_goals, saved_sw, saved_st, saved_lt, saved_photo
             ))
             count += 1
 
@@ -195,7 +206,7 @@ def sync_students_excel():
 
 init_db()
 
-# Auto sync on load
+# Auto sync on load if database is empty
 conn = get_db_connection()
 c = conn.cursor()
 c.execute("SELECT COUNT(*) FROM students")
@@ -226,10 +237,10 @@ def generate_upboard_card(student, entries_df):
             """
     else:
         for _, itm in entries_df.iterrows():
-            reflection = itm['student_reflection'] if clean_val(itm['student_reflection']) else "सक्रिय प्रतिभागिता एवं अनुभव प्राप्त किया।"
-            desc = itm['student_description'] if clean_val(itm['student_description']) else "गतिविधि में सक्रिय योगदान"
+            reflection = itm['student_reflection'] if clean_val(itm['student_reflection']) else "सक्रिय सहभागिता एवं व्यावहारिक अनुभव।"
+            desc = itm['student_description'] if clean_val(itm['student_description']) else "गतिविधि में योगदान"
             marks = itm['marks_awarded'] if itm['marks_awarded'] else 5
-            
+
             activities_rows += f"""
             <tr style="border-bottom: 1px solid #E2E8F0; font-size: 12px;">
                 <td style="padding: 7px; text-align: center;">{itm['activity_date']}</td>
@@ -242,10 +253,35 @@ def generate_upboard_card(student, entries_df):
 
     today_str = datetime.now().strftime('%d-%m-%Y')
     hindi_name = f"({student.get('student_name_hindi')})" if student.get('student_name_hindi') else ""
-    goals = student.get('academic_goals') if student.get(
-        'academic_goals') else "सत्र 2026-27 में बोर्ड परीक्षा में उत्कृष्ट अंक अर्जित करना तथा नियमित अध्ययन करना।"
-    sw = student.get('strengths_weaknesses') if student.get(
-        'strengths_weaknesses') else "ताकत: परिश्रम व अनुशासन | सुधार क्षेत्र: समय प्रबंधन।"
+
+    # Academic Vision Display (Short-Term & Long-Term)
+    short_term = student.get('short_term_goal', '').strip()
+    long_term = student.get('long_term_goal', '').strip()
+    general_goals = student.get('academic_goals', '').strip()
+
+    if not short_term and not long_term:
+        vision_html = f"""
+        <div style="background: #F8FAFC; border-left: 4px solid #3B82F6; padding: 10px 14px; border-radius: 4px; font-size: 13px; color: #334155; line-height: 1.5;">
+            {general_goals if general_goals else "सत्र 2026-27 में बोर्ड परीक्षा में उत्कृष्ट अंक अर्जित करना तथा नियमित अध्ययन करना।"}
+        </div>
+        """
+    else:
+        st_text = short_term if short_term else "कक्षा 12वीं में 90%+ अंक अर्जित करना तथा विषयों में प्रवीणता प्राप्त करना।"
+        lt_text = long_term if long_term else "उच्च शिक्षा एवं प्रतियोगी परीक्षाओं (Engineering/CUET/NDA आदि) में सफलता प्राप्त करना।"
+        vision_html = f"""
+        <div style="display: flex; gap: 12px; margin-top: 5px;">
+            <div style="flex: 1; background: #F8FAFC; border-left: 4px solid #3B82F6; padding: 8px 12px; border-radius: 4px; font-size: 12.5px; color: #1e293b;">
+                <strong style="color: #1E3A8A;">📌 अल्पकालिक लक्ष्य (Short-Term Goal 2026-27):</strong><br>
+                {st_text}
+            </div>
+            <div style="flex: 1; background: #F8FAFC; border-left: 4px solid #059669; padding: 8px 12px; border-radius: 4px; font-size: 12.5px; color: #1e293b;">
+                <strong style="color: #059669;">🎯 दीर्घकालिक लक्ष्य (Long-Term Goal - Career):</strong><br>
+                {lt_text}
+            </div>
+        </div>
+        """
+
+    sw = student.get('strengths_weaknesses') if student.get('strengths_weaknesses') else "ताकत: परिश्रम व अनुशासन | सुधार क्षेत्र: समय प्रबंधन।"
 
     html_content = f"""<!DOCTYPE html>
 <html>
@@ -291,8 +327,8 @@ def generate_upboard_card(student, entries_df):
         </div>
 
         <div style="margin-top: 15px;">
-            <div style="color: #1E3A8A; font-weight: bold; font-size: 14px; margin-bottom: 6px;">🎯 शैक्षणिक लक्ष्य एवं संकल्प (Academic Vision):</div>
-            <div style="background: #F8FAFC; border-left: 4px solid #3B82F6; padding: 10px 14px; border-radius: 4px; font-size: 13px; color: #334155; line-height: 1.5;">{goals}</div>
+            <div style="color: #1E3A8A; font-weight: bold; font-size: 14px; margin-bottom: 6px;">🎯 शैक्षणिक लक्ष्य एवं संकल्प (Academic Vision & Career Goals):</div>
+            {vision_html}
         </div>
 
         <div style="margin-top: 15px;">
@@ -404,11 +440,18 @@ with tabs[0]:
                 type="primary",
                 use_container_width=True
             )
-            st.caption("💡 डाउनलोड की गई HTML फ़ाइल को किसी भी ब्राउज़र में खोलकर Ctrl+P दबाकर सीधे 'Save as PDF' या प्रिंट कर सकते हैं।")
+            st.caption("💡 डाउनलोड की गई HTML फ़ाइल को किसी भी ब्राउज़र में खोलकर सीधे 'Ctrl + P' से Save as PDF करें।")
 
         with col_s2:
             st.info(
                 f"**चयनित विद्यार्थी:** {student_dict.get('student_name')} | **पिता:** {student_dict.get('father_name')} | **S.R. No:** {student_dict.get('sr_no')}")
+            
+            # Show Academic Vision if available
+            st_g = student_dict.get('short_term_goal')
+            lt_g = student_dict.get('long_term_goal')
+            if st_g or lt_g:
+                st.markdown(f"**📌 Short-Term Goal:** {st_g if st_g else 'N/A'}")
+                st.markdown(f"**🎯 Long-Term Goal:** {lt_g if lt_g else 'N/A'}")
 
         st.divider()
         st.components.v1.html(portfolio_html, height=1150, scrolling=True)
@@ -417,7 +460,8 @@ with tabs[0]:
 # --- TAB 2: GOOGLE FORM DATA SYNC / MANUAL INPUT ---
 with tabs[1]:
     st.subheader("📥 Google Form डेटा सिंक (Response Sheet)")
-    st.write("छात्रों द्वारा Google Form भरने के बाद लिंक हुई Google Sheet को **File -> Download -> Microsoft Excel (.xlsx) या CSV (.csv)** के रूप में डाउनलोड करके यहाँ अपलोड करें:")
+    st.write(
+        "छात्रों द्वारा Google Form भरने के बाद लिंक हुई Google Sheet को **File -> Download -> Microsoft Excel (.xlsx) या CSV (.csv)** के रूप में डाउनलोड करके यहाँ अपलोड करें:")
 
     col_up1, col_up2 = st.columns([1.2, 1])
     with col_up1:
@@ -432,15 +476,19 @@ with tabs[1]:
                 st.write(f"📊 कुल प्रविष्टियाँ (Responses found): **{len(df_form)}**")
                 st.dataframe(df_form.head(2), use_container_width=True)
 
-                if st.button("⚡ Sync Responses to Portfolios", type="primary"):
+                if st.button("⚡ Sync Responses & Goals to Portfolios", type="primary"):
                     c = conn.cursor()
-                    success_count = 0
-                    
-                    # Columns identify logic
+                    goals_synced = 0
+                    activities_synced = 0
+
                     cols = list(df_form.columns)
-                    
-                    # Find roll number column
+
+                    # Identify Roll Number Column
                     roll_col = next((col for col in cols if "roll" in col.lower() or "अनुक्रमांक" in col), None)
+
+                    # Identify Short-Term & Long-Term Goal Columns
+                    st_col = next((col for col in cols if "अल्पकालिक" in col or "short-term" in col.lower()), None)
+                    lt_col = next((col for col in cols if "दीर्घकालिक" in col or "long-term" in col.lower()), None)
 
                     if not roll_col:
                         st.error("शीट में Roll Number का कॉलम नहीं मिला! कृपया सुनिश्चित करें कि फॉर्म में 'Roll Number' मौजूद है।")
@@ -450,12 +498,32 @@ with tabs[1]:
                             if not r_no:
                                 continue
 
-                            # Loop through each official activity to see if this student responded
+                            # 1. Update Short-Term and Long-Term Goals
+                            st_val = clean_val(r.get(st_col, "")) if st_col else ""
+                            lt_val = clean_val(r.get(lt_col, "")) if lt_col else ""
+
+                            if st_val or lt_val:
+                                c.execute("""
+                                    UPDATE students 
+                                    SET short_term_goal = CASE WHEN ? != '' THEN ? ELSE short_term_goal END,
+                                        long_term_goal = CASE WHEN ? != '' THEN ? ELSE long_term_goal END,
+                                        academic_goals = CASE WHEN ? != '' THEN ? ELSE academic_goals END
+                                    WHERE roll_no = ?
+                                """, (
+                                    st_val, st_val,
+                                    lt_val, lt_val,
+                                    f"अल्पकालिक: {st_val} | दीर्घकालिक: {lt_val}".strip(" |"),
+                                    f"अल्पकालिक: {st_val} | दीर्घकालिक: {lt_val}".strip(" |"),
+                                    r_no
+                                ))
+                                goals_synced += 1
+
+                            # 2. Update Activities (1 to 14)
                             for act in DEFAULT_ACTIVITIES:
                                 act_num = str(act["sno"])
                                 act_name = act["name"]
-                                
-                                # Match columns for this activity
+
+                                # Match specific column headers based on Apps Script template
                                 desc_col = next((c_name for c_name in cols if f"[{act_num}." in c_name and ("description" in c_name.lower() or "कार्य किया" in c_name)), None)
                                 refl_col = next((c_name for c_name in cols if f"[{act_num}." in c_name and ("reflection" in c_name.lower() or "सीखा" in c_name)), None)
                                 link_col = next((c_name for c_name in cols if f"[{act_num}." in c_name and ("link" in c_name.lower() or "photo" in c_name.lower() or "drive" in c_name.lower())), None)
@@ -464,7 +532,7 @@ with tabs[1]:
                                 refl_val = clean_val(r.get(refl_col, "")) if refl_col else ""
                                 link_val = clean_val(r.get(link_col, "")) if link_col else ""
 
-                                # Only add if student submitted something for this activity
+                                # If student entered something for this activity, insert or update
                                 if desc_val or refl_val or link_val:
                                     today_now = datetime.now().strftime("%d-%m-%Y")
                                     c.execute("""
@@ -477,51 +545,43 @@ with tabs[1]:
                                         r_no, act_name, act["cat"], act["date"],
                                         desc_val, refl_val, link_val, today_now
                                     ))
-                                    success_count += 1
+                                    activities_synced += 1
 
                         conn.commit()
-                        st.success(f"🎉 बधाई! कुल {success_count} गतिविधि प्रविष्टियाँ सफलतापूर्वक पोर्टफोलियो में सिंक हो गईं!")
+                        st.success(f"🎉 सफलता! {goals_synced} छात्रों के शैक्षणिक लक्ष्य (Goals) और {activities_synced} गतिविधि प्रविष्टियाँ सफलतापूर्वक सिंक हो गईं!")
                         st.rerun()
 
             except Exception as e:
-                st.error(f"फॉर्म फ़ाइल पढ़ने में त्रुटि: {e}")
+                st.error(f"फ़ाइल पढ़ने में त्रुटि: {e}")
 
     with col_up2:
-        st.write("#### या किसी छात्र की गतिविधि सीधे दर्ज करें:")
-        with st.form("manual_entry_form"):
-            m_roll = st.selectbox("विद्यार्थी (Roll No):",
-                                  students_df["roll_no"].tolist() if not students_df.empty else [])
-            m_act = st.selectbox("14 आधिकारिक गतिविधियों में से चुनें:", [a["name"] for a in DEFAULT_ACTIVITIES])
-            m_desc = st.text_area("विवरण / कार्य:", placeholder="छात्र द्वारा किया गया कार्य...")
-            m_refl = st.text_area("विद्यार्थी का चिंतन (सीख):", placeholder="इस गतिविधि से क्या सीखा...")
-            m_marks = st.slider("अंक (Rubric Marks 1-5):", 1, 5, 5)
+        st.write("#### या मैन्युअल रूप से लक्ष्य / गतिविधि दर्ज करें:")
+        with st.form("manual_goal_form"):
+            st.markdown("**1. छात्र का शैक्षणिक विज़न दर्ज करें:**")
+            m_roll_goal = st.selectbox("विद्यार्थी (Roll No):",
+                                       students_df["roll_no"].tolist() if not students_df.empty else [], key="m_roll_goal")
+            m_st_goal = st.text_area("अल्पकालिक लक्ष्य (Short-Term Goal):", placeholder="सत्र 2026-27 के लक्ष्य...")
+            m_lt_goal = st.text_area("दीर्घकालिक लक्ष्य (Long-Term Goal):", placeholder="करियर / उच्च शिक्षा के लक्ष्य...")
 
-            if st.form_submit_button("पोर्टफोलियो में सुरक्षित करें"):
+            if st.form_submit_button("लक्ष्य सुरक्षित करें"):
                 c = conn.cursor()
-                act_info = next((item for item in DEFAULT_ACTIVITIES if item["name"] == m_act), None)
-                act_date = act_info["date"] if act_info else datetime.now().strftime("%d.%m.%Y")
-                act_cat = act_info["cat"] if act_info else "सह-पाठ्यचर्या"
-
+                combined_goal = f"अल्पकालिक: {m_st_goal} | दीर्घकालिक: {m_lt_goal}".strip(" |")
                 c.execute("""
-                    INSERT INTO portfolio_entries (
-                        roll_no, activity_name, category, activity_date,
-                        student_description, student_reflection, marks_awarded, submitted_on
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    m_roll, m_act, act_cat, act_date, m_desc, m_refl, m_marks,
-                    datetime.now().strftime("%d-%m-%Y")
-                ))
+                    UPDATE students 
+                    SET short_term_goal = ?, long_term_goal = ?, academic_goals = ?
+                    WHERE roll_no = ?
+                """, (m_st_goal, m_lt_goal, combined_goal, m_roll_goal))
                 conn.commit()
-                st.success("गतिविधि छात्र के पोर्टफोलियो में सुरक्षित हो गई!")
+                st.success("शैक्षणिक लक्ष्य सुरक्षित हो गए!")
                 st.rerun()
 
 # --- TAB 3: PROFILES & PHOTO UPLOAD ---
 with tabs[2]:
-    st.subheader("👥 छात्र मास्टर प्रोफाइल एवं फोटो अपलोड")
+    st.subheader("👥 छात्र मास्टर प्रोफाइल, लक्ष्य एवं फोटो प्रबंधन")
     if not students_df.empty:
-        col_ph1, col_ph2 = st.columns([1.5, 2])
+        col_ph1, col_ph2 = st.columns([1.2, 2.8])
         with col_ph1:
-            sel_photo_roll = st.selectbox("फोटो हेतु छात्र चुनें:", students_df["roll_no"].tolist(), key="photo_sel")
+            sel_photo_roll = st.selectbox("फोटो अपलोड हेतु छात्र चुनें:", students_df["roll_no"].tolist(), key="photo_sel")
             photo_file = st.file_uploader("पासपोर्ट साइज फोटो (JPG/PNG)", type=["jpg", "jpeg", "png"])
             if photo_file is not None:
                 encoded = base64.b64encode(photo_file.read()).decode("utf-8")
@@ -534,7 +594,9 @@ with tabs[2]:
 
         with col_ph2:
             all_records = pd.read_sql_query("""
-                SELECT roll_no, student_name, father_name, sr_no, mob_no,
+                SELECT roll_no, student_name, father_name, 
+                       CASE WHEN short_term_goal != '' THEN short_term_goal ELSE '-' END AS 'Short-Term Goal',
+                       CASE WHEN long_term_goal != '' THEN long_term_goal ELSE '-' END AS 'Long-Term Goal',
                        CASE WHEN photo_b64 != '' THEN 'Uploaded ✅' ELSE 'Pending ❌' END AS Photo
                 FROM students ORDER BY CAST(roll_no AS INTEGER) ASC
             """, conn)
@@ -560,7 +622,7 @@ with tabs[4]:
             st.rerun()
 
     with col_mg2:
-        st.write("#### 2. गलत गतिविधि प्रविष्टि डिलीट करें")
+        st.write("#### 2. प्रविष्टि डिलीट करें")
         all_entries = pd.read_sql_query(
             "SELECT id, roll_no, activity_name, activity_date FROM portfolio_entries ORDER BY id DESC", conn)
         if not all_entries.empty:
