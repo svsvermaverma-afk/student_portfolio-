@@ -308,7 +308,7 @@ def generate_upboard_card(student, entries_df):
     <!-- ================= PAGE 1 ================= -->
     <div class="page">
         <div style="text-align: center; border-bottom: 2px solid #E2E8F0; padding-bottom: 12px; margin-bottom: 18px;">
-            <h2 style="margin: 0; color: #1E3A8A; font-size: 22px; text-transform: uppercase; letter-spacing: 1px;">माध्यमिक शिक्षा परिषद्, उत्तर प्रदेश (UP BOARD)</h2>
+            <h2 style="margin: 0; color: #1E3A8A; font-size: 22px; text-transform: uppercase; letter-spacing: 1px;">ADITYA BIRLA INTERMEDIATE COLLEGE, RENUKOOT, SONEBHADRA (UP)</h2>
             <h3 style="margin: 4px 0 0 0; color: #059669; font-size: 17px;">छात्र पोर्टफोलियो एवं सतत आंतरिक मूल्यांकन रिकॉर्ड</h3>
             <div style="font-size: 13px; color: #475569; margin-top: 4px;">सत्र: 2026 - 2027 | कक्षा: 12-B</div>
             <div style="display: inline-block; background: #1E3A8A; color: white; padding: 3px 14px; border-radius: 12px; font-size: 11px; margin-top: 6px; font-weight: 600;">भाग 1 : व्यक्तिगत विवरण एवं स्व-मूल्यांकन</div>
