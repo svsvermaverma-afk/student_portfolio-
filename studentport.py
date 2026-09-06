@@ -61,7 +61,7 @@ DEFAULT_ACTIVITIES = [
     {"sno": 14, "date": "14.05.2026", "name": "Creative Story Writing Competition", "cat": "साहित्यिक (अंग्रेजी लेखन)", "desc": "English Story Writing (Thinking & Writing Skills)", "incharge": "श्री अशोक द्विवेदी"}
 ]
 
-# --- Database Setup & Non-destructive Migrations ---
+# --- Database Setup ---
 def get_db_connection():
     return sqlite3.connect("class12b_portfolio.db", check_same_thread=False)
 
@@ -156,7 +156,7 @@ def load_analytics_data():
     if "PEN NUMBER" in df_info.columns:
         df_info["PEN NUMBER"] = df_info["PEN NUMBER"].fillna("").astype(str).str.replace(r"\.0$", "", regex=True)
     if "AADHAR NO." in df_info.columns:
-        df_info["AADHAR NO."] = "XXXX-XXXX-XXXX"
+        df_info["AADHAR NO."] = "[Aadhaar Redacted]"
     if "MOB. NO." in df_info.columns:
         df_info["MOB. NO."] = df_info["MOB. NO."].fillna("").astype(str).str.replace(r"\.0$", "", regex=True)
     if "D.O.B." in df_info.columns:
@@ -530,7 +530,7 @@ conn = get_db_connection()
 # =========================================================
 with tabs[0]:
     if df_master.empty:
-        st.warning("Master excel sheet (XII B INFORMATION.xlsx / studentport.xlsx) detect nahi hui.")
+        st.warning("Master excel sheet detect nahi hui.")
     else:
         st.subheader("🔍 क्लास फ़िल्टर एवं सांख्यिकी (Class Analytics & Master Records)")
 
@@ -547,7 +547,6 @@ with tabs[0]:
             cat_opts = ["All"] + sorted([x for x in df_master["CAT."].dropna().unique() if x != "-"]) if "CAT." in df_master.columns else ["All"]
             sel_cat = st.selectbox("Category (OBC / SC / ST / GEN):", cat_opts, key="m_cat")
 
-        # Additional Attendance & Test Filters
         af_col1, af_col2 = st.columns(2)
         att_filter_mode = "सभी विद्यार्थी"
         with af_col1:
@@ -559,7 +558,6 @@ with tabs[0]:
             if "TEST %" in df_master.columns:
                 test_filter_mode = st.radio("मासिक टेस्ट प्रदर्शन:", ["सभी विद्यार्थी", "33% से कम (< 33% फेल)", "60% या अधिक (>= 60% First Div)"], horizontal=True)
 
-        # Apply Filters
         f_df = df_master.copy()
         if sel_occ != "All" and "OCCUPATION" in f_df.columns:
             f_df = f_df[f_df["OCCUPATION"] == sel_occ]
@@ -586,7 +584,6 @@ with tabs[0]:
             elif test_filter_mode == "60% या अधिक (>= 60% First Div)":
                 f_df = f_df[f_df["TEST %"] >= 60.0]
 
-        # Metric cards
         m1, m2, m3, m4, m5, m6 = st.columns(6)
         m1.metric("Filtered Students", len(f_df))
         m2.metric("Boys (M)", len(f_df[f_df["GENDER"] == "M"]) if "GENDER" in f_df.columns else 0)
@@ -609,7 +606,6 @@ with tabs[0]:
 
         st.divider()
 
-        # Dynamic Column selection
         base_cols = [c for c in ["ROLL NO.", "S.R. NO.", "STUDENT'S NAME", "FATHER'S NAME", "GENDER", "CAT.", "CASTE", "MOB. NO.", "OCCUPATION", "E.CODE", "DEPT."] if c in f_df.columns]
         all_cols = base_cols + attendance_cols + test_cols
         sel_display = st.multiselect("प्रदर्शित किए जाने वाले कॉलम चुनें:", options=all_cols, default=all_cols)
@@ -685,7 +681,7 @@ with tabs[2]:
             try:
                 df_form = pd.read_csv(uploaded_form, dtype=str) if uploaded_form.name.endswith('.csv') else pd.read_excel(uploaded_form, dtype=str)
 
-                st.write(f"📊 कुल प्राप्त रिस्पॉन्स (Responses found): **{len(df_form)}**")
+                st.write(f"📊 कुल प्राप्त रिस्पॉन्स: **{len(df_form)}**")
                 st.dataframe(df_form.head(2), use_container_width=True)
 
                 if st.button("⚡ Sync Responses & Goals to Portfolios", type="primary"):
@@ -699,14 +695,13 @@ with tabs[2]:
                     lt_col = next((col for col in cols if "दीर्घकालिक" in col or "long-term" in col.lower()), None)
 
                     if not roll_col:
-                        st.error("शीट में Roll Number का कॉलम नहीं मिला! कृपया सुनिश्चित करें कि फॉर्म में 'Roll Number' मौजूद है।")
+                        st.error("शीट में Roll Number का कॉलम नहीं मिला!")
                     else:
                         for _, r in df_form.iterrows():
                             r_no = clean_val(r.get(roll_col, ""))
                             if not r_no:
                                 continue
 
-                            # Update Goals
                             st_val = clean_val(r.get(st_col, "")) if st_col else ""
                             lt_val = clean_val(r.get(lt_col, "")) if lt_col else ""
 
@@ -720,7 +715,6 @@ with tabs[2]:
                                 """, (st_val, st_val, lt_val, lt_val, st_val, lt_val, f"अल्पकालिक: {st_val} | दीर्घकालिक: {lt_val}".strip(" |"), r_no))
                                 goals_synced += 1
 
-                            # Update Activities
                             for act in DEFAULT_ACTIVITIES:
                                 act_num = str(act["sno"])
                                 act_name = act["name"]
@@ -743,13 +737,10 @@ with tabs[2]:
                                             marks_awarded, submitted_on
                                         ) VALUES (?, ?, ?, ?, ?, ?, ?, 5, ?)
                                     """, (r_no, act_name, act["cat"], act["date"], desc_val, refl_val, direct_img, today_now))
-
-                                    if direct_img:
-                                        c.execute("UPDATE students SET photo_url=? WHERE roll_no=?", (direct_img, r_no))
                                     activities_synced += 1
 
                         conn.commit()
-                        st.success(f"🎉 सफलता! {goals_synced} छात्रों के लक्ष्य (Goals) और {activities_synced} गतिविधियाँ सुरक्षित हो गईं!")
+                        st.success(f"🎉 सफलता! {goals_synced} छात्रों के लक्ष्य और {activities_synced} गतिविधियाँ सुरक्षित हो गईं!")
                         st.rerun()
             except Exception as e:
                 st.error(f"फ़ाइल पढ़ने में त्रुटि: {e}")
@@ -757,7 +748,8 @@ with tabs[2]:
     with col_u2:
         st.write("#### या मैन्युअल रूप से लक्ष्य दर्ज करें:")
         with st.form("manual_goal_form"):
-            m_roll_goal = st.selectbox("विद्यार्थी (Roll No):", students_db["roll_no"].tolist() if not students_db.empty else [], key="m_roll_goal")
+            students_list_for_goal = students_db["roll_no"].tolist() if not students_db.empty else []
+            m_roll_goal = st.selectbox("विद्यार्थी (Roll No):", students_list_for_goal, key="m_roll_goal")
             m_st_goal = st.text_area("अल्पकालिक लक्ष्य (Short-Term Goal):", placeholder="सत्र 2026-27 के लक्ष्य...")
             m_lt_goal = st.text_area("दीर्घकालिक लक्ष्य (Long-Term Goal):", placeholder="करियर / उच्च शिक्षा के लक्ष्य...")
 
@@ -776,25 +768,77 @@ with tabs[2]:
                 st.rerun()
 
 # =========================================================
-# TAB 4: PROFILES, GOALS & PHOTOS
+# TAB 4: PROFILES, GOALS & PHOTOS (SINGLE & BULK UPLOAD)
 # =========================================================
 with tabs[3]:
     st.subheader("👥 छात्र मास्टर प्रोफाइल, लक्ष्य एवं फोटो प्रबंधन")
     if not students_db.empty:
-        c_ph1, c_ph2 = st.columns([1.2, 2.8])
-        with c_ph1:
-            sel_photo_roll = st.selectbox("फोटो अपलोड हेतु छात्र चुनें:", students_db["roll_no"].tolist(), key="photo_sel")
-            photo_file = st.file_uploader("पासपोर्ट साइज फोटो (JPG/PNG)", type=["jpg", "jpeg", "png"])
-            if photo_file is not None:
-                encoded = base64.b64encode(photo_file.read()).decode("utf-8")
-                if st.button("Save Photo to Student Profile", type="primary"):
-                    c = conn.cursor()
-                    c.execute("UPDATE students SET photo_b64=? WHERE roll_no=?", (encoded, sel_photo_roll))
-                    conn.commit()
-                    st.success(f"Roll {sel_photo_roll} की फोटो स्थायी रूप से सुरक्षित हो गई!")
-                    st.rerun()
+        col_ph1, col_ph2 = st.columns([1.3, 2.7])
+        
+        with col_ph1:
+            upload_mode = st.radio("📷 फोटो अपलोड प्रकार चुनें:", ["एक-एक करके (Single Photo)", "एक साथ Roll No. wise (Bulk Upload)"], horizontal=True)
 
-        with c_ph2:
+            # MODE 1: SINGLE PHOTO UPLOAD
+            if upload_mode == "एक-एक करके (Single Photo)":
+                st.markdown("##### 👤 किसी एक विद्यार्थी की फोटो अपलोड करें:")
+                sel_photo_roll = st.selectbox("विद्यार्थी चुनें:", students_db["roll_no"].tolist(), key="photo_sel")
+                photo_file = st.file_uploader("पासपोर्ट साइज फोटो (JPG/PNG)", type=["jpg", "jpeg", "png"], key="single_pic")
+                if photo_file is not None:
+                    encoded = base64.b64encode(photo_file.read()).decode("utf-8")
+                    if st.button("Save Photo (सुरक्षित करें)", type="primary"):
+                        c = conn.cursor()
+                        c.execute("UPDATE students SET photo_b64=? WHERE roll_no=?", (encoded, sel_photo_roll))
+                        conn.commit()
+                        st.success(f"Roll {sel_photo_roll} की फोटो सुरक्षित हो गई!")
+                        st.rerun()
+
+            # MODE 2: BULK PHOTO UPLOAD (ROLL NUMBER WISE)
+            else:
+                st.markdown("##### 📁 सभी बच्चों की फोटो एक साथ अपलोड करें:")
+                st.info("💡 **फ़ाइल नाम का नियम:** फ़ोटो के नाम में छात्र का Roll No होना चाहिए।\n\nउदाहरण: `1.jpg`, `Roll_2.png`, `15_photo.jpeg` या `05.jpg` आदि।")
+                
+                bulk_files = st.file_uploader(
+                    "सभी फ़ोटो एक साथ सेलेक्ट करें (Multiple Files):", 
+                    type=["jpg", "jpeg", "png"], 
+                    accept_multiple_files=True,
+                    key="bulk_pics"
+                )
+                
+                if bulk_files:
+                    st.write(f"चयनित फ़ाइलें: **{len(bulk_files)}**")
+                    if st.button("⚡ Process & Link All Photos", type="primary"):
+                        c = conn.cursor()
+                        matched_count = 0
+                        unmatched = []
+                        
+                        all_rolls = students_db["roll_no"].tolist()
+                        
+                        for bf in bulk_files:
+                            fname = bf.name
+                            # Extract number from filename (e.g. '12.jpg' -> '12', 'Roll 5' -> '5')
+                            num_match = re.search(r'\d+', fname)
+                            if num_match:
+                                extracted_roll = str(int(num_match.group(0))) # remove leading zeros
+                                
+                                # Match with existing student roll numbers
+                                matched_roll = next((r for r in all_rolls if str(int(r)) == extracted_roll), None)
+                                
+                                if matched_roll:
+                                    encoded = base64.b64encode(bf.read()).decode("utf-8")
+                                    c.execute("UPDATE students SET photo_b64=? WHERE roll_no=?", (encoded, matched_roll))
+                                    matched_count += 1
+                                else:
+                                    unmatched.append(fname)
+                            else:
+                                unmatched.append(fname)
+                        
+                        conn.commit()
+                        st.success(f"🎉 सफलता! {matched_count} विद्यार्थियों की फ़ोटो उनके Roll Number से लिंक हो गई!")
+                        if unmatched:
+                            st.warning(f"⚠️ इन फ़ाइलों में मान्य Roll Number नहीं मिला: {', '.join(unmatched[:5])}")
+                        st.rerun()
+
+        with col_ph2:
             all_records = pd.read_sql_query("""
                 SELECT roll_no, student_name, father_name,
                        CASE WHEN short_term_goal != '' THEN short_term_goal ELSE '-' END AS 'Short-Term Goal',
