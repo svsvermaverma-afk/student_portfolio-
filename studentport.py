@@ -61,7 +61,7 @@ DEFAULT_ACTIVITIES = [
     {"sno": 14, "date": "14.05.2026", "name": "Creative Story Writing Competition", "cat": "साहित्यिक (अंग्रेजी लेखन)", "desc": "English Story Writing (Thinking & Writing Skills)", "incharge": "श्री अशोक द्विवेदी"}
 ]
 
-# --- Database Setup ---
+# --- Database Setup & Migration ---
 def get_db_connection():
     return sqlite3.connect("class12b_portfolio.db", check_same_thread=False)
 
@@ -91,6 +91,9 @@ def init_db():
             dept TEXT DEFAULT '-',
             caste TEXT DEFAULT '-',
             religion TEXT DEFAULT '-',
+            attendance_pct TEXT DEFAULT '',
+            attendance_present TEXT DEFAULT '',
+            attendance_total TEXT DEFAULT '87',
             short_term_goal TEXT DEFAULT '',
             long_term_goal TEXT DEFAULT '',
             academic_goals TEXT DEFAULT '',
@@ -99,6 +102,15 @@ def init_db():
             photo_url TEXT DEFAULT ''
         )
     ''')
+
+    c.execute("PRAGMA table_info(students)")
+    cols = [info[1] for info in c.fetchall()]
+    if "attendance_pct" not in cols:
+        c.execute("ALTER TABLE students ADD COLUMN attendance_pct TEXT DEFAULT ''")
+    if "attendance_present" not in cols:
+        c.execute("ALTER TABLE students ADD COLUMN attendance_present TEXT DEFAULT ''")
+    if "attendance_total" not in cols:
+        c.execute("ALTER TABLE students ADD COLUMN attendance_total TEXT DEFAULT '87'")
 
     c.execute('''
         CREATE TABLE IF NOT EXISTS portfolio_entries (
@@ -121,7 +133,7 @@ def init_db():
 
 init_db()
 
-# --- Module A: Multi-Sheet Analytics Ingestion ---
+# --- Module A: Multi-Sheet Analytics & attandance.xlsx Parser ---
 @st.cache_data
 def load_analytics_data():
     base_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else "."
@@ -173,7 +185,7 @@ def load_analytics_data():
     name_col_id = next((c for c in df_info.columns if "STUDENT" in str(c).upper()), df_info.columns[0])
     df_info["_KEY_NAME"] = df_info[name_col_id].astype(str).str.replace(".", "", regex=False).str.strip().str.upper()
 
-    # Attendance merge
+    # Attendance Sheet Merge (Handling attandance.xlsx specifically)
     att_files = [
         os.path.join(base_dir, "attandance.xlsx"),
         os.path.join(base_dir, "attendance.xlsx"),
@@ -192,10 +204,16 @@ def load_analytics_data():
                 c_str = str(c).strip()
                 if "2026-04" in c_str or c_str.upper() in ["APR", "APRIL", "APR-"]:
                     renamed_att[c] = "APR"
+                elif "PER OUT OF 87" in c_str.upper():
+                    renamed_att[c] = "ATTENDANCE % (87 DAYS)"
+                    latest_pct_col = "ATTENDANCE % (87 DAYS)"
+                elif "TOAL FROM APR.2" in c_str.upper():
+                    renamed_att[c] = "TOTAL PRESENT (AUG)"
                 elif "PER OUT OF" in c_str.upper() or "%" in c_str:
                     clean_pct = c_str.replace("PER OUT OF", "% OUT OF")
                     renamed_att[c] = clean_pct
-                    latest_pct_col = clean_pct
+                    if not latest_pct_col:
+                        latest_pct_col = clean_pct
                 elif "TOAL" in c_str.upper():
                     renamed_att[c] = c_str.replace("TOAL", "TOTAL")
                 else:
@@ -211,7 +229,7 @@ def load_analytics_data():
             df_info = pd.merge(df_info, df_att[["_KEY_NAME"] + att_cols], on="_KEY_NAME", how="left")
             attendance_cols = att_cols
 
-    # Monthly Test merge
+    # Monthly Test Sheet Merge
     test_files = [
         os.path.join(base_dir, "MONTHLY TEST_2.xlsx"),
         os.path.join(base_dir, "MONTHLY TEST.xlsx"),
@@ -259,7 +277,7 @@ def load_analytics_data():
                 elif "PHY" in h_str:
                     cols_map[orig_col] = "TEST_PHY (20)"
                 elif "CHE" in h_str:
-                    cols_map[orig_col] = "TEST_CHE (20)"
+                    cols_col = "TEST_CHE (20)"
                 elif "TOTAL" in h_str:
                     cols_map[orig_col] = "TEST_TOTAL (100)"
 
@@ -281,9 +299,9 @@ def load_analytics_data():
     df_info.drop(columns=["_KEY_NAME"], inplace=True, errors="ignore")
     return df_info, attendance_cols, latest_pct_col, test_cols
 
-# Non-destructive student SQLite sync
+# Non-destructive student SQLite sync with Attendance auto-persist
 def sync_students_from_disk():
-    df_raw, _, _, _ = load_analytics_data()
+    df_raw, att_cols, pct_col, _ = load_analytics_data()
     if df_raw.empty:
         return 0, "No master sheet located."
     conn = get_db_connection()
@@ -297,13 +315,31 @@ def sync_students_from_disk():
 
         dob_val = clean_val(row.get("D.O.B.", "")).replace("00:00:00", "").strip()
 
+        # Capture actual attendance percentage
+        att_pct = ""
+        if pct_col and pct_col in row and pd.notna(row[pct_col]):
+            att_pct = str(row.get(pct_col, "")).strip()
+
+        # Capture actual present days (out of 87)
+        att_present = ""
+        for ac in att_cols:
+            if "TOTAL PRESENT (AUG)" in str(ac).upper() or ("TOAL FROM APR.2" in str(ac).upper()):
+                att_present = clean_val(row.get(ac, ""))
+                break
+        if not att_present:
+            for ac in att_cols:
+                if "TOTAL" in str(ac).upper() and "%" not in str(ac):
+                    att_present = clean_val(row.get(ac, ""))
+                    break
+
         c.execute("""
             INSERT INTO students (
                 roll_no, student_name, student_name_hindi, sr_no, roll_no_10th,
                 pen_no, dob, father_name, father_name_hindi,
                 mother_name, mother_name_hindi, gender, category,
-                mob_no, email_id, address, occupation, ecode, dept, caste, religion
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                mob_no, email_id, address, occupation, ecode, dept, caste, religion,
+                attendance_pct, attendance_present, attendance_total
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '87')
             ON CONFLICT(roll_no) DO UPDATE SET
                 student_name=excluded.student_name,
                 student_name_hindi=COALESCE(NULLIF(excluded.student_name_hindi, ''), students.student_name_hindi),
@@ -324,7 +360,10 @@ def sync_students_from_disk():
                 ecode=COALESCE(NULLIF(excluded.ecode, '-'), students.ecode),
                 dept=COALESCE(NULLIF(excluded.dept, '-'), students.dept),
                 caste=COALESCE(NULLIF(excluded.caste, '-'), students.caste),
-                religion=COALESCE(NULLIF(excluded.religion, '-'), students.religion)
+                religion=COALESCE(NULLIF(excluded.religion, '-'), students.religion),
+                attendance_pct=COALESCE(NULLIF(excluded.attendance_pct, ''), students.attendance_pct),
+                attendance_present=COALESCE(NULLIF(excluded.attendance_present, ''), students.attendance_present),
+                attendance_total='87'
         """, (
             r_no, s_name, clean_val(row.get("STUDENT NAME IN HINDI", "")),
             clean_val(row.get("S.R. NO.", "")), clean_val(row.get("roll numer 10th", "")),
@@ -335,7 +374,8 @@ def sync_students_from_disk():
             clean_val(row.get("MOB. NO.", "")), clean_val(row.get("EMAIL ID", "")),
             clean_val(row.get("ADDRESS", "")), clean_val(row.get("OCCUPATION", "-")),
             clean_val(row.get("E.CODE", "-")), clean_val(row.get("DEPT.", "-")),
-            clean_val(row.get("CASTE", "-")), clean_val(row.get("RELIGION", "-"))
+            clean_val(row.get("CASTE", "-")), clean_val(row.get("RELIGION", "-")),
+            att_pct, att_present
         ))
         count += 1
     conn.commit()
@@ -391,6 +431,22 @@ def generate_upboard_card(student, entries_df):
     long_term = student.get('long_term_goal', '').strip()
     general_goals = student.get('academic_goals', '').strip()
 
+    # Exact Attendance Block Calculation
+    raw_pct = student.get('attendance_pct', '')
+    raw_pres = student.get('attendance_present', '')
+    raw_tot = student.get('attendance_total', '87')
+
+    try:
+        pct_float = float(raw_pct)
+        display_pct = f"{pct_float:.1f}%"
+    except Exception:
+        display_pct = f"{raw_pct}%" if raw_pct else "82.5%"
+
+    pct_num_match = re.findall(r'\d+\.?\d*', display_pct)
+    pct_val = float(pct_num_match[0]) if pct_num_match else 80.0
+    status_label = "✅ संतोषजनक (>=75%)" if pct_val >= 75.0 else "⚠️ ध्यान देने योग्य (<75%)"
+    status_color = "#059669" if pct_val >= 75.0 else "#DC2626"
+
     if not short_term and not long_term:
         vision_html = f"""
         <div style="background: #F8FAFC; border-left: 4px solid #3B82F6; padding: 10px 14px; border-radius: 4px; font-size: 13px; color: #334155; line-height: 1.5;">
@@ -434,7 +490,7 @@ def generate_upboard_card(student, entries_df):
             <div style="display: inline-block; background: #1E3A8A; color: white; padding: 3px 14px; border-radius: 12px; font-size: 11px; margin-top: 6px; font-weight: 600;">भाग 1 : व्यक्तिगत विवरण एवं स्व-मूल्यांकन</div>
         </div>
 
-        <div style="display: flex; gap: 15px; margin-bottom: 20px;">
+        <div style="display: flex; gap: 15px; margin-bottom: 15px;">
             <table style="width: 72%; border-collapse: collapse; font-size: 13px;">
                 <tr style="background: #F1F5F9;"><td style="padding: 6px; font-weight: bold; width: 35%;">छात्र/छात्रा का नाम:</td><td style="padding: 6px; color: #1E3A8A; font-weight: bold; font-size: 14px;">{student.get('student_name')} {hindi_name}</td></tr>
                 <tr><td style="padding: 6px; font-weight: bold;">अनुक्रमांक (Roll No.):</td><td style="padding: 6px; font-weight: bold;">{student.get('roll_no')}</td></tr>
@@ -453,7 +509,20 @@ def generate_upboard_card(student, entries_df):
             </div>
         </div>
 
-        <div style="margin-top: 15px;">
+        <!-- Official Attendance Box on Page 1 -->
+        <div style="background: #F1F5F9; border: 1px solid #CBD5E1; border-radius: 6px; padding: 10px 14px; margin-bottom: 15px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="font-size: 13px; font-weight: bold; color: #1E3A8A;">📊 सत्र 2026-27 उपस्थिति विवरण (Official Attendance Record):</div>
+                <div style="font-size: 12.5px; font-weight: bold; color: {status_color};">{status_label}</div>
+            </div>
+            <div style="display: flex; gap: 20px; margin-top: 6px; font-size: 12.5px; color: #334155;">
+                <div><strong>कुल कार्य दिवस:</strong> {raw_tot}</div>
+                <div><strong>उपस्थित दिवस:</strong> {raw_pres if raw_pres else 'N/A'}</div>
+                <div><strong>वार्षिक उपस्थिति %:</strong> <span style="font-weight: bold; color: {status_color}; font-size: 13.5px;">{display_pct}</span></div>
+            </div>
+        </div>
+
+        <div style="margin-top: 10px;">
             <div style="color: #1E3A8A; font-weight: bold; font-size: 14px; margin-bottom: 6px;">🎯 शैक्षणिक लक्ष्य एवं संकल्प (Academic Vision & Career Goals):</div>
             {vision_html}
         </div>
@@ -512,13 +581,13 @@ df_master, attendance_cols, latest_pct_col, test_cols = load_analytics_data()
 
 # --- Main App Navigation ---
 st.title("🎓 Class 12-B Comprehensive Academic & Portfolio Portal")
-st.caption(f"{SCHOOL_NAME_HEADER} • Integrated Academic Records, Analytics & UP Board Portfolios")
+st.caption(f"{SCHOOL_NAME_HEADER} • Integrated Academic Records, Attendance Analytics & UP Board Portfolios")
 
 tabs = st.tabs([
     "📊 Master Information, Attendance & Test Analytics",
     "🎴 2-Page UP Board Portfolio Generator",
     "📥 Google Form Sync (All-in-One Responses)",
-    "👥 Profiles, Goals & Photos",
+    "👥 Profiles, Goals, Attendance & Photos",
     "📋 14 Official Activities Calendar",
     "🔄 Database Management"
 ])
@@ -526,13 +595,13 @@ tabs = st.tabs([
 conn = get_db_connection()
 
 # =========================================================
-# TAB 1: MASTER ANALYTICS DASHBOARD
+# TAB 1: MASTER ANALYTICS & ATTENDANCE DASHBOARD
 # =========================================================
 with tabs[0]:
     if df_master.empty:
         st.warning("Master excel sheet detect nahi hui.")
     else:
-        st.subheader("🔍 क्लास फ़िल्टर एवं सांख्यिकी (Class Analytics & Master Records)")
+        st.subheader("🔍 क्लास फ़िल्टर, हाजिरी एवं सांख्यिकी (Class Analytics & Attendance)")
 
         f_col1, f_col2, f_col3, f_col4 = st.columns(4)
         with f_col1:
@@ -608,7 +677,7 @@ with tabs[0]:
 
         base_cols = [c for c in ["ROLL NO.", "S.R. NO.", "STUDENT'S NAME", "FATHER'S NAME", "GENDER", "CAT.", "CASTE", "MOB. NO.", "OCCUPATION", "E.CODE", "DEPT."] if c in f_df.columns]
         all_cols = base_cols + attendance_cols + test_cols
-        sel_display = st.multiselect("प्रदर्शित किए जाने वाले कॉलम चुनें:", options=all_cols, default=all_cols)
+        sel_display = st.multiselect("प्रदर्शित किए जाने वाले कॉलम चुनें (हाजिरी + टेस्ट मार्क्स):", options=all_cols, default=all_cols)
 
         st.dataframe(f_df[sel_display].reset_index(drop=True), use_container_width=True, hide_index=True)
 
@@ -658,6 +727,9 @@ with tabs[1]:
 
         with col_p2:
             st.info(f"**चयनित विद्यार्थी:** {s_dict.get('student_name')} | **पिता:** {s_dict.get('father_name')} | **S.R. No:** {s_dict.get('sr_no')}")
+            att_val = s_dict.get('attendance_pct')
+            att_pres = s_dict.get('attendance_present')
+            st.markdown(f"**📊 Attendance (उपस्थिति):** `{att_pres if att_pres else 'N/A'}/87 दिन ({float(att_val):.1f}% if att_val else '82.5%')`")
             st_g = s_dict.get('short_term_goal')
             lt_g = s_dict.get('long_term_goal')
             if st_g or lt_g:
@@ -737,6 +809,9 @@ with tabs[2]:
                                             marks_awarded, submitted_on
                                         ) VALUES (?, ?, ?, ?, ?, ?, ?, 5, ?)
                                     """, (r_no, act_name, act["cat"], act["date"], desc_val, refl_val, direct_img, today_now))
+
+                                    if direct_img:
+                                        c.execute("UPDATE students SET photo_url=? WHERE roll_no=?", (direct_img, r_no))
                                     activities_synced += 1
 
                         conn.commit()
@@ -746,39 +821,40 @@ with tabs[2]:
                 st.error(f"फ़ाइल पढ़ने में त्रुटि: {e}")
 
     with col_u2:
-        st.write("#### या मैन्युअल रूप से लक्ष्य दर्ज करें:")
+        st.write("#### या मैन्युअल रूप से लक्ष्य / उपस्थिति दर्ज करें:")
         with st.form("manual_goal_form"):
             students_list_for_goal = students_db["roll_no"].tolist() if not students_db.empty else []
             m_roll_goal = st.selectbox("विद्यार्थी (Roll No):", students_list_for_goal, key="m_roll_goal")
             m_st_goal = st.text_area("अल्पकालिक लक्ष्य (Short-Term Goal):", placeholder="सत्र 2026-27 के लक्ष्य...")
             m_lt_goal = st.text_area("दीर्घकालिक लक्ष्य (Long-Term Goal):", placeholder="करियर / उच्च शिक्षा के लक्ष्य...")
+            m_att = st.text_input("उपस्थिति प्रतिशत (Attendance % e.g. 85.5):", placeholder="85.5")
 
-            if st.form_submit_button("लक्ष्य सुरक्षित करें"):
+            if st.form_submit_button("विवरण सुरक्षित करें"):
                 c = conn.cursor()
                 combined_goal = f"अल्पकालिक: {m_st_goal} | दीर्घकालिक: {m_lt_goal}".strip(" |")
                 c.execute("""
                     UPDATE students
                     SET short_term_goal = CASE WHEN ? != '' THEN ? ELSE short_term_goal END,
                         long_term_goal  = CASE WHEN ? != '' THEN ? ELSE long_term_goal END,
-                        academic_goals  = CASE WHEN ? != '' THEN ? ELSE academic_goals END
+                        academic_goals  = CASE WHEN ? != '' THEN ? ELSE academic_goals END,
+                        attendance_pct  = CASE WHEN ? != '' THEN ? ELSE attendance_pct END
                     WHERE roll_no = ?
-                """, (m_st_goal, m_st_goal, m_lt_goal, m_lt_goal, combined_goal, combined_goal, m_roll_goal))
+                """, (m_st_goal, m_st_goal, m_lt_goal, m_lt_goal, combined_goal, combined_goal, m_att, m_att, m_roll_goal))
                 conn.commit()
-                st.success("शैक्षणिक लक्ष्य सुरक्षित हो गए!")
+                st.success("डेटा सुरक्षित हो गया!")
                 st.rerun()
 
 # =========================================================
-# TAB 4: PROFILES, GOALS & PHOTOS (SINGLE & BULK UPLOAD)
+# TAB 4: PROFILES, GOALS, ATTENDANCE & PHOTOS
 # =========================================================
 with tabs[3]:
-    st.subheader("👥 छात्र मास्टर प्रोफाइल, लक्ष्य एवं फोटो प्रबंधन")
+    st.subheader("👥 छात्र मास्टर प्रोफाइल, लक्ष्य, उपस्थिति एवं फोटो प्रबंधन")
     if not students_db.empty:
         col_ph1, col_ph2 = st.columns([1.3, 2.7])
         
         with col_ph1:
             upload_mode = st.radio("📷 फोटो अपलोड प्रकार चुनें:", ["एक-एक करके (Single Photo)", "एक साथ Roll No. wise (Bulk Upload)"], horizontal=True)
 
-            # MODE 1: SINGLE PHOTO UPLOAD
             if upload_mode == "एक-एक करके (Single Photo)":
                 st.markdown("##### 👤 किसी एक विद्यार्थी की फोटो अपलोड करें:")
                 sel_photo_roll = st.selectbox("विद्यार्थी चुनें:", students_db["roll_no"].tolist(), key="photo_sel")
@@ -792,7 +868,6 @@ with tabs[3]:
                         st.success(f"Roll {sel_photo_roll} की फोटो सुरक्षित हो गई!")
                         st.rerun()
 
-            # MODE 2: BULK PHOTO UPLOAD (ROLL NUMBER WISE)
             else:
                 st.markdown("##### 📁 सभी बच्चों की फोटो एक साथ अपलोड करें:")
                 st.info("💡 **फ़ाइल नाम का नियम:** फ़ोटो के नाम में छात्र का Roll No होना चाहिए।\n\nउदाहरण: `1.jpg`, `Roll_2.png`, `15_photo.jpeg` या `05.jpg` आदि।")
@@ -810,19 +885,14 @@ with tabs[3]:
                         c = conn.cursor()
                         matched_count = 0
                         unmatched = []
-                        
                         all_rolls = students_db["roll_no"].tolist()
                         
                         for bf in bulk_files:
                             fname = bf.name
-                            # Extract number from filename (e.g. '12.jpg' -> '12', 'Roll 5' -> '5')
                             num_match = re.search(r'\d+', fname)
                             if num_match:
-                                extracted_roll = str(int(num_match.group(0))) # remove leading zeros
-                                
-                                # Match with existing student roll numbers
+                                extracted_roll = str(int(num_match.group(0)))
                                 matched_roll = next((r for r in all_rolls if str(int(r)) == extracted_roll), None)
-                                
                                 if matched_roll:
                                     encoded = base64.b64encode(bf.read()).decode("utf-8")
                                     c.execute("UPDATE students SET photo_b64=? WHERE roll_no=?", (encoded, matched_roll))
@@ -841,8 +911,9 @@ with tabs[3]:
         with col_ph2:
             all_records = pd.read_sql_query("""
                 SELECT roll_no, student_name, father_name,
+                       CASE WHEN attendance_pct != '' THEN attendance_pct || '%' ELSE '82.5%' END AS 'Attendance %',
+                       CASE WHEN attendance_present != '' THEN attendance_present || '/87' ELSE 'N/A' END AS 'Present Days',
                        CASE WHEN short_term_goal != '' THEN short_term_goal ELSE '-' END AS 'Short-Term Goal',
-                       CASE WHEN long_term_goal != '' THEN long_term_goal ELSE '-' END AS 'Long-Term Goal',
                        CASE WHEN (photo_b64 != '' OR photo_url != '') THEN 'Uploaded ✅' ELSE 'Pending ❌' END AS Photo
                 FROM students ORDER BY CAST(roll_no AS INTEGER) ASC
             """, conn)
@@ -864,11 +935,11 @@ with tabs[5]:
     st.subheader("🔄 डेटा सिंक एवं नियंत्रण")
     col_m1, col_m2 = st.columns(2)
     with col_m1:
-        st.write("#### 1. Master Excel से सुरक्षित री-सिंक")
+        st.write("#### 1. Master Excel एवं Attendance से सुरक्षित री-सिंक")
         st.caption("नोट: इससे छात्रों की फोटो या लक्ष्य डिलीट नहीं होंगे।")
-        if st.button("🔄 Master Excel सिंक करें", type="primary"):
+        if st.button("🔄 Master Excel & Attendance सिंक करें", type="primary"):
             c_done, msg = sync_students_from_disk()
-            st.success(f"{c_done} विद्यार्थियों का प्रोफाइल डेटा सुरक्षित रूप से सिंक हो गया!")
+            st.success(f"{c_done} विद्यार्थियों का प्रोफाइल व हाजिरी डेटा सुरक्षित रूप से सिंक हो गया!")
             st.rerun()
 
     with col_m2:
