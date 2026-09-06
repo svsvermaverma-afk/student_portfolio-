@@ -133,7 +133,7 @@ def init_db():
 
 init_db()
 
-# --- Module A: Multi-Sheet Analytics & attandance.xlsx Ingestion ---
+# --- Module A: Multi-Sheet Analytics Ingestion ---
 @st.cache_data
 def load_analytics_data():
     base_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else "."
@@ -151,7 +151,6 @@ def load_analytics_data():
     xls = pd.ExcelFile(info_path)
     target_sheet = "Sheet1 (5)" if "Sheet1 (5)" in xls.sheet_names else xls.sheet_names[0]
     df_info = pd.read_excel(info_path, sheet_name=target_sheet)
-    df_info = df_info.dropna(subset=[c for c in df_info.columns if "NAME" in str(c).upper()][:1]).copy()
 
     for col in list(df_info.columns):
         if "OCCUPATION" in str(col):
@@ -159,8 +158,15 @@ def load_analytics_data():
         elif str(col).strip() == "ADDRESS":
             df_info.rename(columns={col: "ADDRESS"}, inplace=True)
 
+    # Filter out empty/0 rows to display exact 63 active students
     if "ROLL NO." in df_info.columns:
         df_info["ROLL NO."] = pd.to_numeric(df_info["ROLL NO."], errors="coerce").fillna(0).astype(int)
+        df_info = df_info[df_info["ROLL NO."] > 0].copy()
+
+    name_col_id = next((c for c in df_info.columns if "STUDENT" in str(c).upper()), df_info.columns[0])
+    df_info = df_info[df_info[name_col_id].astype(str).str.strip().str.lower() != "nan"].copy()
+    df_info = df_info.dropna(subset=[name_col_id]).copy()
+
     if "S.R. NO." in df_info.columns:
         df_info["S.R. NO."] = pd.to_numeric(df_info["S.R. NO."], errors="coerce").fillna(0).astype(int).astype(str)
     if "roll numer 10th" in df_info.columns:
@@ -182,7 +188,6 @@ def load_analytics_data():
         if col in df_info.columns:
             df_info[col] = df_info[col].astype(str).str.strip().str.upper().replace("NAN", "-").replace("", "-")
 
-    name_col_id = next((c for c in df_info.columns if "STUDENT" in str(c).upper()), df_info.columns[0])
     df_info["_KEY_NAME"] = df_info[name_col_id].astype(str).str.replace(".", "", regex=False).str.strip().str.upper()
 
     # Attendance Sheet Merge
