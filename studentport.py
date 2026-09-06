@@ -133,7 +133,7 @@ def init_db():
 
 init_db()
 
-# --- Module A: Multi-Sheet Analytics & attandance.xlsx Parser ---
+# --- Module A: Multi-Sheet Analytics & attandance.xlsx Ingestion ---
 @st.cache_data
 def load_analytics_data():
     base_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else "."
@@ -185,7 +185,7 @@ def load_analytics_data():
     name_col_id = next((c for c in df_info.columns if "STUDENT" in str(c).upper()), df_info.columns[0])
     df_info["_KEY_NAME"] = df_info[name_col_id].astype(str).str.replace(".", "", regex=False).str.strip().str.upper()
 
-    # Attendance Sheet Merge (Handling attandance.xlsx specifically)
+    # Attendance Sheet Merge
     att_files = [
         os.path.join(base_dir, "attandance.xlsx"),
         os.path.join(base_dir, "attendance.xlsx"),
@@ -277,7 +277,7 @@ def load_analytics_data():
                 elif "PHY" in h_str:
                     cols_map[orig_col] = "TEST_PHY (20)"
                 elif "CHE" in h_str:
-                    cols_col = "TEST_CHE (20)"
+                    cols_map[orig_col] = "TEST_CHE (20)"
                 elif "TOTAL" in h_str:
                     cols_map[orig_col] = "TEST_TOTAL (100)"
 
@@ -315,12 +315,10 @@ def sync_students_from_disk():
 
         dob_val = clean_val(row.get("D.O.B.", "")).replace("00:00:00", "").strip()
 
-        # Capture actual attendance percentage
         att_pct = ""
         if pct_col and pct_col in row and pd.notna(row[pct_col]):
             att_pct = str(row.get(pct_col, "")).strip()
 
-        # Capture actual present days (out of 87)
         att_present = ""
         for ac in att_cols:
             if "TOTAL PRESENT (AUG)" in str(ac).upper() or ("TOAL FROM APR.2" in str(ac).upper()):
@@ -431,13 +429,12 @@ def generate_upboard_card(student, entries_df):
     long_term = student.get('long_term_goal', '').strip()
     general_goals = student.get('academic_goals', '').strip()
 
-    # Exact Attendance Block Calculation
     raw_pct = student.get('attendance_pct', '')
     raw_pres = student.get('attendance_present', '')
     raw_tot = student.get('attendance_total', '87')
 
     try:
-        pct_float = float(raw_pct)
+        pct_float = float(str(raw_pct).replace('%', '').strip())
         display_pct = f"{pct_float:.1f}%"
     except Exception:
         display_pct = f"{raw_pct}%" if raw_pct else "82.5%"
@@ -509,7 +506,7 @@ def generate_upboard_card(student, entries_df):
             </div>
         </div>
 
-        <!-- Official Attendance Box on Page 1 -->
+        <!-- Attendance Summary Box on Page 1 -->
         <div style="background: #F1F5F9; border: 1px solid #CBD5E1; border-radius: 6px; padding: 10px 14px; margin-bottom: 15px;">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div style="font-size: 13px; font-weight: bold; color: #1E3A8A;">📊 सत्र 2026-27 उपस्थिति विवरण (Official Attendance Record):</div>
@@ -727,9 +724,14 @@ with tabs[1]:
 
         with col_p2:
             st.info(f"**चयनित विद्यार्थी:** {s_dict.get('student_name')} | **पिता:** {s_dict.get('father_name')} | **S.R. No:** {s_dict.get('sr_no')}")
-            att_val = s_dict.get('attendance_pct')
-            att_pres = s_dict.get('attendance_present')
-            st.markdown(f"**📊 Attendance (उपस्थिति):** `{att_pres if att_pres else 'N/A'}/87 दिन ({float(att_val):.1f}% if att_val else '82.5%')`")
+            att_val = s_dict.get('attendance_pct', '')
+            att_pres = s_dict.get('attendance_present', '')
+            try:
+                clean_pct_disp = f"{float(str(att_val).replace('%', '').strip()):.1f}%"
+            except Exception:
+                clean_pct_disp = f"{att_val}%" if att_val else "82.5%"
+
+            st.markdown(f"**📊 Attendance (उपस्थिति):** `{att_pres if att_pres else 'N/A'}/87 दिन ({clean_pct_disp})`")
             st_g = s_dict.get('short_term_goal')
             lt_g = s_dict.get('long_term_goal')
             if st_g or lt_g:
