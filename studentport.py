@@ -253,7 +253,7 @@ def load_analytics_data():
             df_info = pd.merge(df_info, df_att[["_MERGE_ROLL"] + att_cols], on="_MERGE_ROLL", how="left")
             attendance_cols = att_cols
 
-    # Monthly Test Sheet Merge by ROLL
+    # --- Robust Monthly Test Sheet Merge ---
     test_files = [
         os.path.join(base_dir, "MONTHLY TEST_2.xlsx"),
         os.path.join(base_dir, "MONTHLY TEST.xlsx"),
@@ -265,60 +265,63 @@ def load_analytics_data():
 
     if test_path:
         xls_test = pd.ExcelFile(test_path)
-        target_s = 'Sheet1' if 'Sheet1' in xls_test.sheet_names else xls_test.sheet_names[0]
-        df_raw_test = pd.read_excel(test_path, sheet_name=target_s)
-
-        header_idx = None
-        for i in range(min(5, len(df_raw_test))):
-            row_str = " ".join([str(x).upper() for x in df_raw_test.iloc[i].values])
-            if "HINDI" in row_str and "TOTAL" in row_str:
-                header_idx = i
-                break
-
-        if header_idx is not None:
-            df_test_data = df_raw_test.iloc[header_idx + 1:].copy()
-            new_headers = df_raw_test.iloc[header_idx].values.tolist()
-
-            roll_idx = 0
-            for idx, h in enumerate(new_headers):
-                if "ROLL" in str(h).upper() or "S." in str(h).upper() or "S NO" in str(h).upper():
-                    roll_idx = idx
+        # Search all sheets if Sheet1 not immediately having data
+        for target_s in xls_test.sheet_names:
+            df_raw_test = pd.read_excel(test_path, sheet_name=target_s)
+            
+            header_idx = None
+            for i in range(min(10, len(df_raw_test))):
+                row_str = " ".join([str(x).upper() for x in df_raw_test.iloc[i].values])
+                if any(k in row_str for k in ["HINDI", "ENG", "MATH", "PHY", "TOTAL"]):
+                    header_idx = i
                     break
 
-            cols_map = {}
-            for idx, h in enumerate(new_headers):
-                h_str = str(h).strip().upper()
-                orig_col = df_test_data.columns[idx]
-                if idx == roll_idx:
-                    cols_map[orig_col] = "_TEST_ROLL"
-                elif "HINDI" in h_str:
-                    cols_map[orig_col] = "TEST_HINDI (20)"
-                elif "ENG" in h_str:
-                    cols_map[orig_col] = "TEST_ENG (20)"
-                elif "MATH" in h_str:
-                    cols_map[orig_col] = "TEST_MATHS (20)"
-                elif "PHY" in h_str:
-                    cols_map[orig_col] = "TEST_PHY (20)"
-                elif "CHE" in h_str:
-                    cols_map[orig_col] = "TEST_CHE (20)"
-                elif "TOTAL" in h_str:
-                    cols_map[orig_col] = "TEST_TOTAL (100)"
+            if header_idx is not None:
+                df_test_data = df_raw_test.iloc[header_idx + 1:].copy()
+                new_headers = df_raw_test.iloc[header_idx].values.tolist()
 
-            df_test_data.rename(columns=cols_map, inplace=True)
-            if "_TEST_ROLL" in df_test_data.columns:
-                df_test_data["_MERGE_ROLL"] = pd.to_numeric(df_test_data["_TEST_ROLL"], errors="coerce").fillna(0).astype(int)
-                df_test_data = df_test_data[df_test_data["_MERGE_ROLL"] > 0].drop_duplicates(subset=["_MERGE_ROLL"])
+                roll_idx = 0
+                for idx, h in enumerate(new_headers):
+                    h_up = str(h).upper()
+                    if "ROLL" in h_up or "S." in h_up or "S NO" in h_up:
+                        roll_idx = idx
+                        break
 
-                subject_cols = [c for c in cols_map.values() if c.startswith("TEST_")]
-                for sc in subject_cols:
-                    df_test_data[sc] = pd.to_numeric(df_test_data[sc], errors="coerce").fillna(0)
+                cols_map = {}
+                for idx, h in enumerate(new_headers):
+                    h_str = str(h).strip().upper()
+                    orig_col = df_test_data.columns[idx]
+                    if idx == roll_idx:
+                        cols_map[orig_col] = "_TEST_ROLL"
+                    elif "HIN" in h_str:
+                        cols_map[orig_col] = "TEST_HINDI (20)"
+                    elif "ENG" in h_str:
+                        cols_map[orig_col] = "TEST_ENG (20)"
+                    elif "MAT" in h_str:
+                        cols_map[orig_col] = "TEST_MATHS (20)"
+                    elif "PHY" in h_str:
+                        cols_map[orig_col] = "TEST_PHY (20)"
+                    elif "CHE" in h_str:
+                        cols_map[orig_col] = "TEST_CHE (20)"
+                    elif "TOTAL" in h_str:
+                        cols_map[orig_col] = "TEST_TOTAL (100)"
 
-                if "TEST_TOTAL (100)" in df_test_data.columns:
-                    df_test_data["TEST %"] = df_test_data["TEST_TOTAL (100)"].round(1)
-                    subject_cols.append("TEST %")
+                df_test_data.rename(columns=cols_map, inplace=True)
+                if "_TEST_ROLL" in df_test_data.columns:
+                    df_test_data["_MERGE_ROLL"] = pd.to_numeric(df_test_data["_TEST_ROLL"], errors="coerce").fillna(0).astype(int)
+                    df_test_data = df_test_data[df_test_data["_MERGE_ROLL"] > 0].drop_duplicates(subset=["_MERGE_ROLL"])
 
-                df_info = pd.merge(df_info, df_test_data[["_MERGE_ROLL"] + subject_cols], on="_MERGE_ROLL", how="left")
-                test_cols = subject_cols
+                    subject_cols = [c for c in cols_map.values() if c.startswith("TEST_")]
+                    for sc in subject_cols:
+                        df_test_data[sc] = pd.to_numeric(df_test_data[sc], errors="coerce").fillna(0)
+
+                    if "TEST_TOTAL (100)" in df_test_data.columns:
+                        df_test_data["TEST %"] = df_test_data["TEST_TOTAL (100)"].round(1)
+                        subject_cols.append("TEST %")
+
+                    df_info = pd.merge(df_info, df_test_data[["_MERGE_ROLL"] + subject_cols], on="_MERGE_ROLL", how="left")
+                    test_cols = subject_cols
+                    break
 
     df_info = df_info.drop_duplicates(subset=["ROLL NO."]).copy()
     df_info.drop(columns=["_MERGE_ROLL"], inplace=True, errors="ignore")
@@ -424,7 +427,7 @@ def sync_students_from_disk():
 
 sync_students_from_disk()
 
-# --- Module B: 2-Page UP Board Card HTML Generator (With Monthly Test Table) ---
+# --- Module B: 2-Page UP Board Card HTML Generator ---
 def generate_upboard_card(student, entries_df):
     s_photo = student.get("photo_b64", "")
     p_url = student.get("photo_url", "")
@@ -911,25 +914,49 @@ with tabs[2]:
                 st.error(f"फ़ाइल पढ़ने में त्रुटि: {e}")
 
     with col_u2:
-        st.write("#### या मैन्युअल रूप से लक्ष्य / उपस्थिति दर्ज करें:")
+        st.write("#### या मैन्युअल रूप से लक्ष्य / उपस्थिति / टेस्ट दर्ज करें:")
         with st.form("manual_goal_form"):
             students_list_for_goal = students_db["roll_no"].tolist() if not students_db.empty else []
             m_roll_goal = st.selectbox("विद्यार्थी (Roll No):", students_list_for_goal, key="m_roll_goal")
             m_st_goal = st.text_area("अल्पकालिक लक्ष्य (Short-Term Goal):", placeholder="सत्र 2026-27 के लक्ष्य...")
             m_lt_goal = st.text_area("दीर्घकालिक लक्ष्य (Long-Term Goal):", placeholder="करियर / उच्च शिक्षा के लक्ष्य...")
             m_att = st.text_input("उपस्थिति प्रतिशत (Attendance % e.g. 85.5):", placeholder="85.5")
+            
+            st.markdown("**मासिक टेस्ट प्राप्तांक (Optional):**")
+            tg1, tg2, tg3 = st.columns(3)
+            with tg1:
+                in_hin = st.text_input("हिन्दी (20):", placeholder="18")
+                in_eng = st.text_input("अंग्रेजी (20):", placeholder="16")
+            with tg2:
+                in_mat = st.text_input("गणित (20):", placeholder="19")
+                in_phy = st.text_input("भौतिक (20):", placeholder="17")
+            with tg3:
+                in_che = st.text_input("रसायन (20):", placeholder="18")
+                in_tot = st.text_input("कुल (100):", placeholder="88")
 
             if st.form_submit_button("विवरण सुरक्षित करें"):
                 c = conn.cursor()
                 combined_goal = f"अल्पकालिक: {m_st_goal} | दीर्घकालिक: {m_lt_goal}".strip(" |")
+                calc_pct = f"{float(in_tot):.1f}" if in_tot and re.match(r'^\d+(\.\d+)?$', in_tot) else ""
                 c.execute("""
                     UPDATE students
                     SET short_term_goal = CASE WHEN ? != '' THEN ? ELSE short_term_goal END,
                         long_term_goal  = CASE WHEN ? != '' THEN ? ELSE long_term_goal END,
                         academic_goals  = CASE WHEN ? != '' THEN ? ELSE academic_goals END,
-                        attendance_pct  = CASE WHEN ? != '' THEN ? ELSE attendance_pct END
+                        attendance_pct  = CASE WHEN ? != '' THEN ? ELSE attendance_pct END,
+                        test_hindi      = CASE WHEN ? != '' THEN ? ELSE test_hindi END,
+                        test_eng        = CASE WHEN ? != '' THEN ? ELSE test_eng END,
+                        test_maths      = CASE WHEN ? != '' THEN ? ELSE test_maths END,
+                        test_phy        = CASE WHEN ? != '' THEN ? ELSE test_phy END,
+                        test_che        = CASE WHEN ? != '' THEN ? ELSE test_che END,
+                        test_total      = CASE WHEN ? != '' THEN ? ELSE test_total END,
+                        test_pct        = CASE WHEN ? != '' THEN ? ELSE test_pct END
                     WHERE roll_no = ?
-                """, (m_st_goal, m_st_goal, m_lt_goal, m_lt_goal, combined_goal, combined_goal, m_att, m_att, m_roll_goal))
+                """, (
+                    m_st_goal, m_st_goal, m_lt_goal, m_lt_goal, combined_goal, combined_goal, m_att, m_att,
+                    in_hin, in_hin, in_eng, in_eng, in_mat, in_mat, in_phy, in_phy, in_che, in_che, in_tot, in_tot, calc_pct, calc_pct,
+                    m_roll_goal
+                ))
                 conn.commit()
                 st.success("डेटा सुरक्षित हो गया!")
                 st.rerun()
